@@ -7,7 +7,6 @@ import com.qisheng.chess.pvp.GameMessages;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.GameState;
 import com.qisheng.chess.pvp.SessionManager;
-import com.qisheng.chess.network.PopupS2CPacket;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.network.chat.Component;
@@ -34,8 +33,9 @@ import java.util.UUID;
  *  2. 完成后立即发送 CHESS_OPEN_SCREEN + CHESS_PLAYER_INFO,客户端打开 GUI
  *  3. GUI 内点击选子/落子,不再走 in-world click
  *
- * 提示渠道:所有用户反馈都走 {@link GameBroadcaster#sendPopupTo popup}
- * (in-GUI 弹窗),不再使用 sendSystemMessage(避免聊天栏刷屏)。
+ * 提示渠道:右键棋盘方块的所有用户反馈走 {@code ServerPlayer#sendSystemMessage}
+ * (聊天栏)。其余场景(对战内事件、求和、认输等)仍走 GameBroadcaster 的
+ * popup / broadcast 路径。
  *
  * 服务端维护:
  *  - onPlace → SessionManager.getOrCreate 注册会话
@@ -71,17 +71,13 @@ public class CChessBoardBlock extends BaseEntityBlock {
 
         SessionManager sm = SessionManager.get();
         if (!sm.isPlayerNear(serverLevel, serverPlayer.getUUID(), pos)) {
-            GameBroadcaster.sendPopupTo(serverPlayer,
-                    Component.literal("请走近棋盘(5 格内)后再右键。"),
-                    PopupS2CPacket.Severity.WARN, 3);
+            serverPlayer.sendSystemMessage(Component.literal("请走近棋盘(5 格内)后再右键。"));
             return InteractionResult.FAIL;
         }
 
         GameSession session = sm.get(pos);
         if (session == null) {
-            GameBroadcaster.sendPopupTo(serverPlayer,
-                    Component.literal("该棋盘无效,请重新放置。"),
-                    PopupS2CPacket.Severity.ERROR, 4);
+            serverPlayer.sendSystemMessage(Component.literal("该棋盘无效,请重新放置。"));
             return InteractionResult.FAIL;
         }
 
@@ -105,55 +101,39 @@ public class CChessBoardBlock extends BaseEntityBlock {
                 if (ok) {
                     if (session.getState() == GameState.PLAYING) {
                         String myRole = session.getRedPlayer().equals(me) ? "红方" : "黑方";
-                        GameBroadcaster.sendPopupTo(serverPlayer,
-                                Component.literal("对局开始!你是" + myRole + "。"),
-                                PopupS2CPacket.Severity.INFO, 4);
+                        serverPlayer.sendSystemMessage(Component.literal("对局开始!你是" + myRole + "。"));
                         UUID otherId = session.getRedPlayer().equals(me)
                                 ? session.getBlackPlayer() : session.getRedPlayer();
                         ServerPlayer other = (ServerPlayer) serverLevel.getPlayerByUUID(otherId);
                         if (other != null) {
-                            GameBroadcaster.sendPopupTo(other,
-                                    Component.literal(serverPlayer.getName().getString()
-                                            + " 已加入" + myRole + "。"),
-                                    PopupS2CPacket.Severity.INFO, 4);
+                            other.sendSystemMessage(Component.literal(serverPlayer.getName().getString()
+                                            + " 已加入" + myRole + "。"));
                             BoardMessages.sendTo(other, session);
                         }
                         GameBroadcaster.broadcastSync(serverLevel, session, pos);
                         BoardMessages.sendTo(serverPlayer, session);
                     } else {
-                        GameBroadcaster.sendPopupTo(serverPlayer,
-                                GameMessages.joinedAsRed(),
-                                PopupS2CPacket.Severity.INFO, 4);
+                        serverPlayer.sendSystemMessage(GameMessages.joinedAsRed());
                     }
                     GameBroadcaster.broadcastRoster(serverLevel, session, pos);
                 } else {
-                    GameBroadcaster.sendPopupTo(serverPlayer,
-                            Component.literal("无法加入该对局。"),
-                            PopupS2CPacket.Severity.ERROR, 4);
+                    serverPlayer.sendSystemMessage(Component.literal("无法加入该对局。"));
                 }
             } else if (gameState == GameState.PLAYING) {
                 // Empty slot? Prefer takeover so the game can keep going.
                 boolean tookOver = false;
                 if (session.getRedPlayer() == null && sm.takeOver(me, pos, 0)) {
-                    GameBroadcaster.sendPopupTo(serverPlayer,
-                            Component.literal("你已接手红方空位。"),
-                            PopupS2CPacket.Severity.INFO, 4);
+                    serverPlayer.sendSystemMessage(Component.literal("你已接手红方空位。"));
                     tookOver = true;
                 } else if (session.getBlackPlayer() == null && sm.takeOver(me, pos, 1)) {
-                    GameBroadcaster.sendPopupTo(serverPlayer,
-                            Component.literal("你已接手黑方空位。"),
-                            PopupS2CPacket.Severity.INFO, 4);
+                    serverPlayer.sendSystemMessage(Component.literal("你已接手黑方空位。"));
                     tookOver = true;
                 } else if (sm.joinAsSpectator(me, pos)) {
-                    GameBroadcaster.sendPopupTo(serverPlayer,
-                            Component.literal("你已加入旁观 — 等有空位时可用 /qisheng takeover 接手。"),
-                            PopupS2CPacket.Severity.INFO, 4);
+                    serverPlayer.sendSystemMessage(Component.literal("你已加入旁观 — 等有空位时可用 /qisheng takeover 接手。"));
                     BoardMessages.sendTo(serverPlayer, session);
                     GameBroadcaster.broadcastRoster(serverLevel, session, pos);
                 } else {
-                    GameBroadcaster.sendPopupTo(serverPlayer,
-                            Component.literal("无法进入旁观。"),
-                            PopupS2CPacket.Severity.ERROR, 4);
+                    serverPlayer.sendSystemMessage(Component.literal("无法进入旁观。"));
                 }
                 if (tookOver) {
                     GameBroadcaster.broadcastSync(serverLevel, session, pos);
@@ -167,13 +147,9 @@ public class CChessBoardBlock extends BaseEntityBlock {
             BoardMessages.sendTo(serverPlayer, session);
             GameBroadcaster.broadcastRoster(serverLevel, session, pos);
             if (session.getRedPlayer() == null) {
-                GameBroadcaster.sendPopupTo(serverPlayer,
-                        Component.literal("红方空位 — 输入 /qisheng takeover red 可接手。"),
-                        PopupS2CPacket.Severity.INFO, 4);
+                serverPlayer.sendSystemMessage(Component.literal("红方空位 — 输入 /qisheng takeover red 可接手。"));
             } else if (session.getBlackPlayer() == null) {
-                GameBroadcaster.sendPopupTo(serverPlayer,
-                        Component.literal("黑方空位 — 输入 /qisheng takeover black 可接手。"),
-                        PopupS2CPacket.Severity.INFO, 4);
+                serverPlayer.sendSystemMessage(Component.literal("黑方空位 — 输入 /qisheng takeover black 可接手。"));
             }
         }
         // If alreadyIn, no popup update — the screen itself shows the latest state.

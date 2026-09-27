@@ -45,10 +45,14 @@ public class PopupS2CPacket {
 
     public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
         Severity sev = Severity.values()[buf.readByte()];
-        String text = buf.readUtf();
+        // Read as Component (not readUtf) — server uses writeComponent which
+        // encodes the style chain (color, bold, italic, clickEvent, …) as
+        // NBT. A raw readUtf would pull out a partial JSON string and the
+        // chip would render the whole NBT structure instead of the text.
+        Component text = buf.readComponent();
         int autoSec = buf.readByte();
 
         var mc = Minecraft.getInstance();
-        mc.execute(() -> PopupOverlay.show(Component.literal(text), sev, autoSec));
+        mc.execute(() -> PopupOverlay.show(text, sev, autoSec));
     }
 }

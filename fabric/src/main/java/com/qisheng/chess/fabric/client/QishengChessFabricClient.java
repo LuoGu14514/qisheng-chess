@@ -1,7 +1,6 @@
 package com.qisheng.chess.fabric.client;
 
 import com.qisheng.chess.QishengChess;
-import com.qisheng.chess.client.ModClient;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -22,6 +21,5 @@ public class QishengChessFabricClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         LOGGER.info("[" + QishengChess.MOD_ID + "] Fabric client init");
-        ModClient.registerBlockEntityRenderers();
     }
 }

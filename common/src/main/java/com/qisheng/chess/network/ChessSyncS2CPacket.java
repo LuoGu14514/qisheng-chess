@@ -1,6 +1,5 @@
 package com.qisheng.chess.network;
 
-import com.qisheng.chess.client.BoardSurfaceCache;
 import com.qisheng.chess.client.CChessBoardScreen;
 import dev.architectury.networking.NetworkManager.PacketContext;
 import net.minecraft.client.Minecraft;
@@ -22,9 +21,6 @@ import net.minecraft.network.chat.Component;
  *
  * <p>客户端收到后:
  * <ul>
- *   <li>always — push the snapshot to {@link BoardSurfaceCache} so the
- *       {@code CChessBoardBER} can redraw the block surface (even when no
- *       player has the GUI open)</li>
  *   <li>if a {@link CChessBoardScreen} is currently up, call
  *       {@code applySync} to refresh it</li>
  * </ul>
@@ -44,9 +40,6 @@ public class ChessSyncS2CPacket {
         var mc = Minecraft.getInstance();
         if (mc.level != null) {
             mc.execute(() -> {
-                // Always update the surface cache so the BER can repaint
-                // the block top, even if the player isn't in the GUI.
-                BoardSurfaceCache.put(pos, fen, sdPlayer, stateOrd, selectPoint);
 
                 if (mc.screen instanceof CChessBoardScreen screen) {
                     screen.applySync(fen, sdPlayer, stateOrd, selectPoint);

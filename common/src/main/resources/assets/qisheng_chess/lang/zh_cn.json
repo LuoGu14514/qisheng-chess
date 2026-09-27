@@ -1,0 +1,19 @@
+{
+  "itemGroup.qisheng_chess": "启升棋",
+  "block.qisheng_chess.cchess": "中国象棋棋盘",
+  "item.qisheng_chess.cchess": "中国象棋棋盘",
+  "item.qisheng_chess.piece_red_general": "红帅",
+  "item.qisheng_chess.piece_red_advisor": "红仕",
+  "item.qisheng_chess.piece_red_elephant": "红相",
+  "item.qisheng_chess.piece_red_horse": "红马",
+  "item.qisheng_chess.piece_red_rook": "红车",
+  "item.qisheng_chess.piece_red_cannon": "红炮",
+  "item.qisheng_chess.piece_red_pawn": "红兵",
+  "item.qisheng_chess.piece_black_general": "黑将",
+  "item.qisheng_chess.piece_black_advisor": "黑士",
+  "item.qisheng_chess.piece_black_elephant": "黑象",
+  "item.qisheng_chess.piece_black_horse": "黑马",
+  "item.qisheng_chess.piece_black_rook": "黑车",
+  "item.qisheng_chess.piece_black_cannon": "黑炮",
+  "item.qisheng_chess.piece_black_pawn": "黑卒"
+}

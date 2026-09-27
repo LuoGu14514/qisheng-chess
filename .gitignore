@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+build/
+**/build/
+**/.gradle/
+
+# Built artifacts
+*.jar
+*.class
+*.log
+
+# IDE
+*.iml
+.idea/
+.vscode/
+.classpath
+.project
+.settings/
+
+# Test run dirs
+runs/
+
+# OS / misc
+Thumbs.db
+.DS_Store
+
+# Internal docs (keep development history local)
+PLAN.md

@@ -1,0 +1,21 @@
+{
+    "schemaVersion": 1,
+    "id": "qisheng_chess",
+    "version": "${version}",
+    "name": "Qisheng Chess",
+    "description": "Independent PVP mod for Chinese Chess. Code: MIT. Assets: CC BY-NC-SA 4.0 (from TLM by tartaric_acid). Non-commercial use only.",
+    "authors": ["light_shade_wind"],
+    "contact": {},
+    "license": "MIT",
+    "environment": "*",
+    "entrypoints": {
+        "main": ["com.qisheng.chess.fabric.QishengChessFabric"],
+        "client": ["com.qisheng.chess.fabric.client.QishengChessFabricClient"]
+    },
+    "depends": {
+        "fabricloader": ">=0.14.0",
+        "minecraft": "~1.20.1",
+        "java": ">=17",
+        "architectury": ">=9.0.0"
+    }
+}

@@ -48,17 +48,22 @@ public class CChessBoardScreen extends Screen {
 
     private static final int COLS = 9;
     private static final int ROWS = 10;
-    private static final int CELL_MIN = 24;
+    private static final int CELL_MIN = 32;
     private static final int CELL_MAX = 80;
-    private static final int PADDING = 24;
-    private static final int TITLE_H = 24;
-    private static final int STATUS_H = 18;
-    private static final int HINT_H = 16;
-    private static final int FOOTER_RESERVED = TITLE_H + STATUS_H + HINT_H + 16;
 
-    private static final int LEFT_W = 150;
-    private static final int RIGHT_W = 160;
-    private static final int CHAT_H = 120;
+    /** Three-column layout: left panel | board | right panel. */
+    private static final int PADDING = 12;
+    private static final int TITLE_H = 28;
+    private static final int STATUS_H = 24;
+    private static final int LEFT_W  = 170;
+    private static final int RIGHT_W = 210;
+
+    /** Per-widget sizes inside their panels. */
+    private static final int BADGE_H   = 44;
+    private static final int BADGE_GAP = 6;
+    private static final int BTN_H     = 24;
+    private static final int BTN_GAP   = 4;
+    private static final int CHAT_ROWS = 8;
 
     private static final int ACTION_SELECT = 1;
     private static final int ACTION_MOVE   = 2;
@@ -100,6 +105,17 @@ public class CChessBoardScreen extends Screen {
     private int boardY = 0;
     private int boardW = 0;
     private int boardH = 0;
+
+    // Cached layout rects (set in recomputeLayout, applied in applyLayout):
+    //   specList / redBadge / blackBadge   — left panel
+    //   actionPanel / chatBox              — right panel
+    private Rect specRect;
+    private Rect redBadgeRect;
+    private Rect blackBadgeRect;
+    private Rect actionRect;
+    private Rect chatRect;
+
+    private record Rect(int x, int y, int w, int h) {}
 
     private SpectatorListWidget specList;
     private PlayerBadgeWidget redBadge;
@@ -209,38 +225,31 @@ public class CChessBoardScreen extends Screen {
     protected void init() {
         super.init();
         recomputeLayout();
-        int specW = LEFT_W - 2 * PADDING;
-        if (specW < 80) specW = 80;
-        int specH = boardH + 2 * 16;
+
+        // Build widgets with their final cached rects. Screen.resize()
+        // already re-runs init() on window resize, so the widget instances
+        // get rebuilt with the new geometry automatically.
         this.specList = new SpectatorListWidget(
-                (this.width - LEFT_W) / 2,
-                boardY - 8,
-                specW, specH);
+                specRect.x(), specRect.y(), specRect.w(), specRect.h());
         addRenderableWidget(this.specList);
 
-        int badgeH = 40;
-        int redX = boardX - 4 - 130;
-        int redY = boardY + boardH - badgeH + 4;
-        int blackX = boardX + boardW + 4;
-        int blackY = boardY + boardH - badgeH + 4;
-        redBadge = new PlayerBadgeWidget(redX, redY, 130, badgeH, null, null, 0, myRole == 0);
-        blackBadge = new PlayerBadgeWidget(blackX, blackY, 130, badgeH, null, null, 1, myRole == 1);
-        addRenderableWidget(redBadge);
-        addRenderableWidget(blackBadge);
+        this.redBadge = new PlayerBadgeWidget(
+                redBadgeRect.x(), redBadgeRect.y(), redBadgeRect.w(), redBadgeRect.h(),
+                null, null, 0, myRole == 0);
+        this.blackBadge = new PlayerBadgeWidget(
+                blackBadgeRect.x(), blackBadgeRect.y(), blackBadgeRect.w(), blackBadgeRect.h(),
+                null, null, 1, myRole == 1);
+        addRenderableWidget(this.redBadge);
+        addRenderableWidget(this.blackBadge);
 
-        int actionX = boardX + boardW + 4;
-        int actionY = boardY;
-        int actionW = 130;
-        int actionH = 5 * 24;
-        actionPanel = new ActionButtonsWidget(actionX, actionY, actionW, actionH);
-        addRenderableWidget(actionPanel);
+        this.actionPanel = new ActionButtonsWidget(
+                actionRect.x(), actionRect.y(), actionRect.w(), actionRect.h());
+        addRenderableWidget(this.actionPanel);
         rebuildActionPanel();
 
-        int chatX = boardX + boardW + 4;
-        int chatY = boardY + boardH + 8;
-        int chatW = 200;
-        chatBox = new ChatBoxWidget(chatX, chatY, chatW, CHAT_H);
-        addRenderableWidget(chatBox);
+        this.chatBox = new ChatBoxWidget(
+                chatRect.x(), chatRect.y(), chatRect.w(), chatRect.h());
+        addRenderableWidget(this.chatBox);
     }
 
     @Override
@@ -249,17 +258,58 @@ public class CChessBoardScreen extends Screen {
         recomputeLayout();
     }
 
+    /**
+     * Pure-math layout pass. Computes the board rect + cached side-panel
+     * rects without touching widget instances. Safe to call before any
+     * widget is created; safe to call from {@link #resize}.
+     */
     private void recomputeLayout() {
-        int boardAreaW = Math.max(1, this.width - LEFT_W - RIGHT_W - 2 * PADDING);
-        int boardAreaH = Math.max(1, this.height - FOOTER_RESERVED - PADDING - CHAT_H);
+        // Available content area (excludes title bar + status bar).
+        int availW = Math.max(1, this.width  - LEFT_W - RIGHT_W);
+        int availH = Math.max(1, this.height - TITLE_H - STATUS_H);
+
+        // ----- Center: board -----
+        int boardAreaW = availW - 2 * PADDING;
+        int boardAreaH = availH - 2 * PADDING;
         int rawCell = Math.min(boardAreaW / (COLS - 1), boardAreaH / (ROWS - 1));
-        this.cell = Math.max(CELL_MIN, Math.min(CELL_MAX, rawCell));
+        this.cell   = Math.max(CELL_MIN, Math.min(CELL_MAX, rawCell));
         this.boardW = (COLS - 1) * this.cell;
         this.boardH = (ROWS - 1) * this.cell;
-        int boardAreaX = LEFT_W + (boardAreaW - this.boardW) / 2;
-        this.boardX = boardAreaX + PADDING;
-        this.boardY = PADDING + TITLE_H;
+
+        int boardAreaX = LEFT_W + PADDING;
+        int boardAreaY = TITLE_H + PADDING;
+        this.boardX = boardAreaX + (boardAreaW - boardW) / 2;
+        this.boardY = boardAreaY + (boardAreaH - boardH) / 2;
+
+        // Vertical content band shared by both side panels.
+        int contentTop    = TITLE_H + PADDING;
+        int contentBottom = this.height - STATUS_H - PADDING;
+
+        // ----- Left panel: red badge, black badge, spec list -----
+        int leftX = PADDING;
+        int leftW = LEFT_W - 2 * PADDING;
+        if (leftW < 80) leftW = 80;
+        this.redBadgeRect   = new Rect(leftX, contentTop,                        leftW, BADGE_H);
+        this.blackBadgeRect = new Rect(leftX, contentTop + BADGE_H + BADGE_GAP,  leftW, BADGE_H);
+        int specY = contentTop + 2 * BADGE_H + BADGE_GAP + PADDING;
+        int specH = Math.max(80, contentBottom - specY);
+        this.specRect = new Rect(leftX, specY, leftW, specH);
+
+        // ----- Right panel: action buttons, chat box -----
+        int rightX = LEFT_W + availW + PADDING;
+        int rightW = RIGHT_W - 2 * PADDING;
+        if (rightW < 120) rightW = 120;
+        int maxButtons = 7;
+        int actionH = maxButtons * (BTN_H + BTN_GAP);
+        this.actionRect = new Rect(rightX, contentTop, rightW, actionH);
+        int chatY = contentTop + actionH + PADDING;
+        int chatH = Math.max(80, contentBottom - chatY);
+        this.chatRect = new Rect(rightX, chatY, rightW, chatH);
     }
+
+    // applyLayout / applyRect removed: AbstractWidget.width/height are
+    // protected and not settable from a non-subclass. Screen.resize() runs
+    // init() again on window changes, so widget geometry is always correct.
 
     private void rebuildActionPanel() {
         if (actionPanel == null) return;

@@ -134,7 +134,8 @@ public class ModCommands {
     private static int doPurge(CommandContext<CommandSourceStack> ctx) {
         int before = SessionManager.get().sessionCount();
         SessionManager.get().resetAll();
-        ctx.getSource().sendSystemMessage(Component.literal("[qisheng] 已清空 " + before + " 个棋盘会话。"));
+        ctx.getSource().sendSystemMessage(Component.translatable(
+                "qisheng.chess.cmd.purge.done", before));
         return 1;
     }
 
@@ -148,8 +149,8 @@ public class ModCommands {
         GameLogic.MoveOutcome out = GameLogic.tryMove(t.session(), player.getUUID(), src, dst);
         switch (out) {
             case OK -> {
-                ctx.getSource().sendSystemMessage(Component.literal(
-                        "[qisheng] 已走子 " + src + " -> " + dst));
+                ctx.getSource().sendSystemMessage(Component.translatable(
+                        "qisheng.chess.cmd.move.ok", src, dst));
                 GameResult result = t.session().getResult();
                 if (result != GameResult.ONGOING) {
                     GameBroadcaster.broadcastGameOver(t.level(), t.session(), t.pos(), result);
@@ -177,9 +178,8 @@ public class ModCommands {
         GameBroadcaster.broadcastSync(t.level(), t.session(), t.pos());
         if (out == GameLogic.SelectOutcome.OK) {
             byte pc = t.session().getChessData().squares[sq];
-            ctx.getSource().sendSystemMessage(Component.literal(
-                    "[qisheng] 已选中方格 " + sq + "(棋子字节 " + pc
-                            + "),用 /qisheng move <src> <dst> 走子。"));
+            ctx.getSource().sendSystemMessage(Component.translatable(
+                    "qisheng.chess.cmd.select.ok", sq, pc));
             return 1;
         }
         ctx.getSource().sendFailure(GameMessages.describeSelect(out));

@@ -211,11 +211,45 @@ class GameSessionPersistenceTest {
         s.setSelectPoint(52);
         s.setRedPlayer(UUID.randomUUID());
         s.setBlackPlayer(UUID.randomUUID());
+        // 最近一步也要参加二次往返测试 —— 0.2.1 起新增的字段,
+        // 必须跟 SelectPoint 一样走"写 → 读 → 再写"路径无丢失。
+        s.setLastMoveSource(51);
+        s.setLastMoveDest(52);
 
         CompoundTag first = s.save();
         CompoundTag second = GameSession.fromTag(first).save();
 
         assertTagsEqual(first, second);
+        assertEquals(51, GameSession.fromTag(first).getLastMoveSource());
+        assertEquals(52, GameSession.fromTag(first).getLastMoveDest());
+    }
+
+    @Test
+    @DisplayName("最近一步持久化:save → fromTag 后 src/dst 保持;越界值回落 -1")
+    void lastMoveRoundTrip() {
+        GameSession s = new GameSession();
+        s.getChessData().fromFen(MID_GAME_FEN);
+        s.setLastMoveSource(51);  // COORD_XY(3, 3)
+        s.setLastMoveDest(52);    // COORD_XY(4, 3)
+
+        GameSession back = GameSession.fromTag(s.save());
+
+        assertEquals(51, back.getLastMoveSource());
+        assertEquals(52, back.getLastMoveDest());
+
+        // 越界值必须被剔除 —— 客户端会按 isSquare() 兜底过滤,但 NBT
+        // 这一层也要干净,避免把过期数据继续往下传。
+        CompoundTag tag = s.save();
+        tag.putInt("LastSrc", 9999);
+        tag.putInt("LastDst", -2);
+        GameSession bad = GameSession.fromTag(tag);
+        assertEquals(-1, bad.getLastMoveSource());
+        assertEquals(-1, bad.getLastMoveDest());
+
+        // 全新会话默认就是 -1。
+        GameSession fresh = GameSession.fromTag(new GameSession().save());
+        assertEquals(-1, fresh.getLastMoveSource());
+        assertEquals(-1, fresh.getLastMoveDest());
     }
 
     @Test
@@ -261,6 +295,8 @@ class GameSessionPersistenceTest {
         assertEquals(a.getString("Result"), b.getString("Result"), "Result");
         assertEquals(a.getInt("SdPlayer"), b.getInt("SdPlayer"), "SdPlayer");
         assertEquals(a.getInt("SelectPoint"), b.getInt("SelectPoint"), "SelectPoint");
+        assertEquals(a.getInt("LastSrc"), b.getInt("LastSrc"), "LastSrc");
+        assertEquals(a.getInt("LastDst"), b.getInt("LastDst"), "LastDst");
         assertEquals(a.hasUUID("Red"), b.hasUUID("Red"), "Red present");
         assertEquals(a.hasUUID("Black"), b.hasUUID("Black"), "Black present");
         if (a.hasUUID("Red")) assertEquals(a.getUUID("Red"), b.getUUID("Red"), "Red");

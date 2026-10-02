@@ -36,6 +36,19 @@ public class GameSession {
     private int sdPlayer = 0;
     private int selectPoint = -1;
 
+    /**
+     * Source and destination squares of the most recent successful move, or
+     * {@code -1} when nothing has been played yet (game reset, fresh save).
+     * Sent to the client with every {@code CHESS_SYNC} / {@code CHESS_OPEN_SCREEN}
+     * so the renderer can highlight the last move.
+     *
+     * <p>Both values are persisted to NBT (see {@link #save()} / {@link #fromTag})
+     * so a player who reconnects mid-chapter still sees the most recent move
+     * highlighted on the board.
+     */
+    private int lastMoveSrc = -1;
+    private int lastMoveDst = -1;
+
     private UUID pendingDrawFrom = null;
     private SwitchPackets.Pending pendingSwitch = null;
 
@@ -119,6 +132,13 @@ public class GameSession {
     public int getSdPlayer() { return sdPlayer; }
     public void setSdPlayer(int sd) { this.sdPlayer = sd; }
 
+    /** Last successful move source square, or {@code -1} if none. */
+    public int getLastMoveSource() { return lastMoveSrc; }
+    public void setLastMoveSource(int s) { this.lastMoveSrc = s; }
+    /** Last successful move destination square, or {@code -1} if none. */
+    public int getLastMoveDest() { return lastMoveDst; }
+    public void setLastMoveDest(int d) { this.lastMoveDst = d; }
+
     public UUID getPendingDrawFrom() { return pendingDrawFrom; }
     public void setPendingDrawFrom(UUID id) { this.pendingDrawFrom = id; }
 
@@ -144,6 +164,8 @@ public class GameSession {
     private static final String TAG_SELECT = "SelectPoint";
     private static final String TAG_RED = "Red";
     private static final String TAG_BLACK = "Black";
+    private static final String TAG_LAST_SRC = "LastSrc";
+    private static final String TAG_LAST_DST = "LastDst";
 
     /** Snapshot of everything that must survive a server restart. */
     public CompoundTag save() {
@@ -156,6 +178,8 @@ public class GameSession {
         tag.putInt(TAG_SELECT, selectPoint);
         if (redPlayer != null) tag.putUUID(TAG_RED, redPlayer);
         if (blackPlayer != null) tag.putUUID(TAG_BLACK, blackPlayer);
+        tag.putInt(TAG_LAST_SRC, lastMoveSrc);
+        tag.putInt(TAG_LAST_DST, lastMoveDst);
         return tag;
     }
 
@@ -182,6 +206,10 @@ public class GameSession {
         s.selectPoint = ChineseChessEngine.isSquare(sel) ? sel : -1;
         if (tag.hasUUID(TAG_RED)) s.redPlayer = tag.getUUID(TAG_RED);
         if (tag.hasUUID(TAG_BLACK)) s.blackPlayer = tag.getUUID(TAG_BLACK);
+        int src = tag.getInt(TAG_LAST_SRC);
+        s.lastMoveSrc = ChineseChessEngine.isSquare(src) ? src : -1;
+        int dst = tag.getInt(TAG_LAST_DST);
+        s.lastMoveDst = ChineseChessEngine.isSquare(dst) ? dst : -1;
         // A game cannot be "playing" with nobody seated; that only happens when
         // the file was edited. Demote instead of leaving a zombie game.
         if (s.state == GameState.PLAYING && s.redPlayer == null && s.blackPlayer == null) {

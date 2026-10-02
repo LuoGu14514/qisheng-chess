@@ -250,7 +250,8 @@ org.gradle.java.installations.auto-download=false
 - **服务端 i18n 完整化(本次新增)** — ChessInteractC2SPacket / GameMessages / ModCommands 全部硬编码中文 → translatable,lang 文件 116→119 键,zh=zh=en 完全对称;唯一残留为 `[qisheng]` 前缀的 admin/operator 反馈。
 
 **未落地(本轮可选)**:
-- 17 音效/走子动画/最近一步高亮 — 没做。
+- 17 音效/走子动画/最近一步高亮 — **v0.2.1 已落地**:最近一步高亮 (`drawLastMoveOverlay` 画 `0xC0FFEB6B` 半透明黄底色块,服务端 `GameSession.lastMoveSrc/lastMoveDst` 随 `CHESS_SYNC` + `CHESS_OPEN_SCREEN` 各加 4 字节下发,`ChineseChessEngine.isSquare()` 兜底越界) + 走子音效 (`SoundEvents.NOTE_BLOCK_PLING`,`applySync` 检测 `lastSrc/lastDst` 变化时播放,`Minecraft.execute()` 派发到渲染线程)。走子动画 (`Position.movePiece` 时 200ms 滑动插值) 仍未做。
+- `[qisheng]` admin 反馈 — **v0.2.1 已落地**:`ModCommands.doPurge/doMove/doSelect` 三处 `Component.literal("[qisheng] ...")` → `translatable`,lang 文件 119→122 键对称。
 - 实机验证 — 容器无 LWJGL Display 与 EULA TTY,无法跑 MC client/server。
 
 ---

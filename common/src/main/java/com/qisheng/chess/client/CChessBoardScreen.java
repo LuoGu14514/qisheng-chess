@@ -14,9 +14,11 @@ import dev.architectury.networking.NetworkManager;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
+import net.minecraft.sounds.SoundEvents;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -107,6 +109,14 @@ public class CChessBoardScreen extends Screen {
     private int sdPlayer = 0;
     private int stateOrd = 1;
     private int selectedSq = -1;
+    /**
+     * Last successful move src & destination (or {@code -1} if no move has been
+     * played yet). Updated on every {@code applySync}; the renderer uses
+     * {@link #drawLastMoveOverlay} to paint a translucent ring around both
+     * squares so the player can see at a glance where the game is at.
+     */
+    private int lastMoveSrc = -1;
+    private int lastMoveDst = -1;
 
     private Roster roster;
 
@@ -176,18 +186,26 @@ public class CChessBoardScreen extends Screen {
     public CChessBoardScreen(BlockPos boardPos, UUID selfId,
                              String fen, int sdPlayer, int stateOrd,
                              int selectPoint, int myRole) {
-        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, null, false);
+        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, null, -1, -1, false);
     }
 
     public CChessBoardScreen(BlockPos boardPos, UUID selfId,
                              String fen, int sdPlayer, int stateOrd,
                              int selectPoint, int myRole, boolean[] legalDests) {
-        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, legalDests, false);
+        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, legalDests, -1, -1, false);
     }
 
     public CChessBoardScreen(BlockPos boardPos, UUID selfId,
                              String fen, int sdPlayer, int stateOrd,
                              int selectPoint, int myRole, boolean[] legalDests,
+                             boolean flipped) {
+        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, legalDests, -1, -1, flipped);
+    }
+
+    public CChessBoardScreen(BlockPos boardPos, UUID selfId,
+                             String fen, int sdPlayer, int stateOrd,
+                             int selectPoint, int myRole, boolean[] legalDests,
+                             int lastMoveSrc, int lastMoveDst,
                              boolean flipped) {
         super(Component.translatable("qisheng.chess.screen.title"));
         this.boardPos = boardPos;
@@ -199,6 +217,8 @@ public class CChessBoardScreen extends Screen {
         this.myRole = myRole;
         this.viewerIsBlack = (myRole == 1);
         this.boardFlipped = this.viewerIsBlack ^ flipped;
+        this.lastMoveSrc = ChineseChessEngine.isSquare(lastMoveSrc) ? lastMoveSrc : -1;
+        this.lastMoveDst = ChineseChessEngine.isSquare(lastMoveDst) ? lastMoveDst : -1;
         // 打开棋盘界面（开局 / 重开）时 fen 与 selectedSq 在这里被赋值，
         // 之后同样要作废缓存，让首次绘制按当前状态重建。
         refreshBoardCaches();
@@ -224,20 +244,37 @@ public class CChessBoardScreen extends Screen {
     }
 
     public void applySync(String fen, int sdPlayer, int stateOrd, int selectPoint) {
-        applySync(fen, sdPlayer, stateOrd, selectPoint, null);
+        applySync(fen, sdPlayer, stateOrd, selectPoint, null, -1, -1);
     }
 
     public void applySync(String fen, int sdPlayer, int stateOrd, int selectPoint,
                           boolean[] legalDests) {
+        applySync(fen, sdPlayer, stateOrd, selectPoint, legalDests, -1, -1);
+    }
+
+    public void applySync(String fen, int sdPlayer, int stateOrd, int selectPoint,
+                          boolean[] legalDests, int lastMoveSrc, int lastMoveDest) {
         if (fen != null) this.fen = fen;
         this.sdPlayer = sdPlayer;
         this.stateOrd = stateOrd;
         this.selectedSq = selectPoint;
+        int prevSrc = this.lastMoveSrc;
+        int prevDst = this.lastMoveDst;
+        this.lastMoveSrc = ChineseChessEngine.isSquare(lastMoveSrc) ? lastMoveSrc : -1;
+        this.lastMoveDst = ChineseChessEngine.isSquare(lastMoveDest) ? lastMoveDest : -1;
         // 选子 / 落子 / 开局 / 重开全都由服务器同步到这里，这是运行期唯一改动
         // fen 与 selectedSq 的入口：赋值后立刻作废棋盘与落点缓存，下一帧按新
         // 状态重算一次（宁可多刷一次，也不能漏刷）。
         refreshBoardCaches();
         applyServerDests(legalDests);
+        // Detect a fresh move: previous src/dst were either none or two different
+        // squares, now they're set to a new src pair. The move-sound is played here
+        // (and only here) so it cannot fire twice for the same move and cannot
+        // miss a move that came in via SYNC.
+        if (this.lastMoveSrc >= 0 && this.lastMoveDst >= 0
+                && (this.lastMoveSrc != prevSrc || this.lastMoveDst != prevDst)) {
+            playMoveSound();
+        }
         rebuildActionPanel();
     }
 
@@ -616,6 +653,10 @@ public class CChessBoardScreen extends Screen {
         drawGrid(gfx);
         drawRiver(gfx);
         drawPalace(gfx);
+        // Last-move overlay goes under the pieces / selection / legal-dot
+        // stack so the highlighted squares don't visually compete with the
+        // current selection ring.
+        drawLastMoveOverlay(gfx);
         if (pos != null) {
             drawPieces(gfx, pos);
             // 是否在盘上统一用门面判断：selectedSq 来自网络包，越界时
@@ -815,6 +856,50 @@ public class CChessBoardScreen extends Screen {
         int r = Math.max(10, cell / 2) + pad;
         int cx = viewCX(sf), cy = viewCY(sr);
         drawRectOutline(gfx, cx - r, cy - r, 2 * r, 2 * r, COL_SEL_BORDER, 3);
+    }
+
+    /**
+     * Paint the translucent "last move" overlay on the source and destination
+     * squares. Drawn under the selection border / legal dots / pieces so it
+     * doesn't fight them for visibility. Skips drawing either square if its
+     * encoded {@code (file, rank)} falls off the board — this can happen for
+     * a malformed packet, or when a piece moved off-board through a degenerate
+     * save state.
+     */
+    private void drawLastMoveOverlay(GuiGraphics gfx) {
+        drawLastMoveSquare(gfx, lastMoveSrc);
+        drawLastMoveSquare(gfx, lastMoveDst);
+    }
+
+    private void drawLastMoveSquare(GuiGraphics gfx, int sq) {
+        if (!ChineseChessEngine.isSquare(sq)) return;
+        int sf = (sq & 0xF) - Position.FILE_LEFT;
+        int sr = ((sq >> 4) & 0xF) - Position.RANK_TOP;
+        if (sf < 0 || sf >= COLS || sr < 0 || sr >= ROWS) return;
+        int pad = Math.max(3, cell / 12);
+        int r = Math.max(10, cell / 2) + pad;
+        int cx = viewCX(sf), cy = viewCY(sr);
+        // fillArea(): same logic as drawRectOutline but with a tint that
+        // reads as a translucent yellow square on top of the board bg.
+        // Alpha 0xC0 + yellow 0xFFEB6B = visible but not blinding.
+        int overlay = 0xC0FFEB6B;
+        gfx.fill(cx - r, cy - r, cx + r + 1, cy + r + 1, overlay);
+    }
+
+    /**
+     * Play the move sound. We use {@code NoteBlock Pling} — a short, light,
+     * non-disruptive chime — so it does not duplicate the louder "Block note"
+     * vanilla already plays when the player themselves places a block.
+     * Wrapped in a {@code Minecraft.execute} because {@link #applySync} can be
+     * invoked outside the render thread.
+     */
+    private void playMoveSound() {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        mc.execute(() -> {
+            var player = mc.getSoundManager();
+            if (player == null) return;
+            player.play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_PLING, 1.0F));
+        });
     }
 
     private void drawLegalDots(GuiGraphics gfx, Position pos, int selectedSq) {

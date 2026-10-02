@@ -6,7 +6,7 @@ Minecraft 1.20.1 的**中国象棋 PVP 模组**(Fabric)。放下一张棋盘方�
 
 - 模组 ID:`qisheng_chess`
 - 方块:`qisheng_chess:cchess`
-- 当前版本:`0.2.0`
+- 当前版本:`0.2.1`
 - 平台:**仅 Fabric**。NeoForge 模块已于 v0.1.2 移除(它此前处于半删除状态,源码语法都不完整)。
 
 ---
@@ -94,6 +94,8 @@ fabric/build/libs/qisheng_chess-fabric-<version>-sources.jar
    (PVC 棋盘拒绝第二个真人接手,电脑才是固定的对手)。
 
 GUI 内的按钮:求和、认输、红黑互换、离开。棋盘下方是旁观名单,右侧是局内聊天。
+最近一次走子的起点和终点会被高亮成淡黄色色块,便于看清刚刚发生了什么;同时
+会有一次轻微的 Note Block Pling 音效（v0.2.1 起）。
 
 ### 命令
 
@@ -149,7 +151,7 @@ qisheng-chess/
 - **PVC 的电脑执黑,不可换**:`BoardMode.PVC` 下人类永远执红;`/qisheng takeover`
   与 `swapRoles` 都会拒绝(PVC 棋盘就是单人 vs 引擎)。
 - **界面只做了 `zh_cn` 与 `en_us` 两种语言**。
-- **GUI 仍缺走子动画、音效、最近一步高亮**。
+- **GUI 仍缺走子动画**（最近一步高亮与走子音效已于 v0.2.1 落地）。
 
 ## 放置与朝向
 

@@ -5,35 +5,51 @@
 
 ---
 
-## [Unreleased] — v0.2 体验版收尾
+## [0.2.1] — v0.2 体验版收尾
 
-目标：把 v0.2 路线上还没落地的最后一项「棋盘可旋转」补上，并完成 i18n 收尾。
+目标：把 v0.2 路线上还没落地的最后三项（最近一步高亮、走子音效、`[qisheng]` admin 反馈 i18n）补上。
 
 ### 变更
 
-#### 棋盘可旋转
+#### 最近一步高亮
 
-- `block/CChessBoardBlock` 新增 `DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING`，默认 `NORTH`。覆盖 `getStateForPlacement` / `rotate` / `mirror` / `createBlockStateDefinition`，方块即可被标准方块状态命令（`/setblock ... [facing=south]`）或结构方块翻转。
-- `pvp/GameBroadcaster.sendOpenScreen` 在写入合法落点位图后追加 1 字节 `flipped`：`flipped = blockState.getValue(FACING) == SOUTH`。
-- `network/ChessOpenScreenS2CPacket` 多读 1 字节 `flipped`，构造 `CChessBoardScreen` 时传入。
-- `client/CChessBoardScreen` 新字段 `boardFlipped` = `viewerIsBlack XOR flipped`，`viewFile/viewRank/fenFileFromView/fenRankFromView` 都改读它。这样：
-  - 红方玩家（`viewerIsBlack=false`）站在默认朝北的棋盘前 → `boardFlipped=false`，红方在下方。
-  - 黑方玩家（`viewerIsBlack=true`）站在默认朝北的棋盘前 → `boardFlipped=true`，黑方在下方。
-  - 任何玩家站在朝南的棋盘前 → `flipped=true`，整体再翻 180°（红方从下方挪到上方），适合把棋盘靠北墙放、南边走来的玩家仍看红方在下面。
-- 朝向 `EAST` / `WEST` 当前不影响 GUI（只影响 3-D 方块模型朝向）；如果以后想让它们也参与翻转，把 `Direction.SOUTH` 比较换成 `Direction.from2DDataValue(...) != facing` 的归一即可。
+- `pvp/GameSession` 新增 `lastMoveSrc` / `lastMoveDst` 字段 + NBT 键 `LastSrc` / `LastDst`，在 `save()` / `fromTag()` 持久化（与 `SelectPoint` 同一层契约：越界回落 `-1`）。
+- `pvp/GameLogic.tryMove` 在 `applyMove` 末尾 `session.setLastMoveSource(src) / setLastMoveDest(dst)`，PVC 与 PVP 路径都覆盖。
+- `pvp/GameBroadcaster.broadcastSync` 与 `sendOpenScreen` 在合法落点位图之后追加 `short lastSrc + short lastDst`（4 字节）。`network/ChessSyncS2CPacket` + `ChessOpenScreenS2CPacket` 顺序读 4 字节。
+- `client/CChessBoardScreen` 新增 `applySync(..., int lastMoveSrc, int lastMoveDest)` 重载 + 构造器重载，`drawLastMoveOverlay(gfx)` 在 pieces / selection / legal-dots 之前画半透明黄底色块 (`0xC0FFEB6B`)。
+- 端到端合约：`CHESS_SYNC` / `CHESS_OPEN_SCREEN` 包末固定追加 `lastSrc` / `lastDst` 4 字节；服务端 `PvcController` 走 `applyMove` → `setLastMove*` 同条路径，所以人机走子也会高亮。
 
-#### 服务端 i18n 完整化
+#### 走子音效
 
-- `pvp/GameMessages.java` 全部 9 个玩家提示重写为 `Component.translatable`：`server.select.*` × 8（OK / 空方格 / 棋子对方 / OUT_OF_BOUNDS / NOT_YOUR_TURN / NOT_IN_GAME / GAME_FINISHED / GAME_NOT_PLAYING）、`server.move.*` × 6（OK / SOURCE_MISMATCH / ILLEGAL_MOVE / KING_EXPOSED / NOT_IN_GAME / GAME_FINISHED）、`server.joined_red` / `server.already_joined_*` × 2。`alreadyJoinedPlaying` 签名改为 `(Component role, Component turn)` 让嵌套角色按客户端 locale 自动渲染。
-- `network/ChessInteractC2SPacket.java` 6 处 `Component.literal` + 3 处"红方(先手)/黑方(后手)/红方走子/黑方走子"拼接 + 1 处玩家名嵌入，全部改 `translatable`。新增内部 helper `roleLabel(session, UUID)` + `turnLabel(session)` 让服务端能直接吐出已本地化的 `Component`。
-- `command/ModCommands.java` 14 处 player-facing 路径（`sendFailure` + `sendPopupTo`）+ 4 处 admin/operator 状态输出走 `translatable`，关键修复：`doTakeover` 的 `roleName` 参数从 `String "红方"/"黑方"` 改成 `Component.translatable("qisheng.chess.role.red/black")`，英文玩家不再看见中文字面量。`setMode` 把原来的"全局模式已设为 PVP/PVC"用 `cmd.mode.changed` + `cmd.mode.label_pvp/pvc` 两条新键重构。
-- `lang/zh_cn.json` 与 `lang/en_us.json` 各新增 31 个键 → **119/119 完全对称**（`cmd.mode.*` × 3 + `server.*` × 22 + `cmd.leave/board/status/takeover.*` 已经在 v0.2 中前序落地）。全仓库 `translatable("qisheng.chess.*")` 引用键集与 lang 文件键集双向差集为 0。
-- 残余硬编码中文仅限于 `[qisheng]` 前缀的 admin/operator 反馈（`ModCommands:137/152/181/307`），保留作为运维输出。
+- `client/CChessBoardScreen.playMoveSound()` 在 `applySync` 检测 `lastSrc` / `lastDst` 变化时播放 `SoundEvents.NOTE_BLOCK_PLING`（轻量、不会和原版方块放置音效冲突）。
+- 播放走 `Minecraft.execute()`，因为 `applySync` 可能由网络线程触发（`CHESS_SYNC` 接收回调）。
+- 用 `(prevSrc, prevDst) ≠ (newSrc, newDst)` 作为「刚发生新走子」的判定 —— 不会因为重发同一帧 SYN 或重建棋盘（`CHESS_OPEN_SCREEN`）而重复响铃。
 
-#### 已知限制 v0.2 仍未决
+#### `[qisheng]` admin 反馈 i18n 收尾
 
-- 棋盘 GUI 没有走子动画、音效、最近一步高亮。
-- 服务端没有实机验证（容器无 LWJGL Display + 无 EULA TTY）。
+- `command/ModCommands.doPurge` / `doMove OK` / `doSelect OK` 三处 `Component.literal("[qisheng] ...") → Component.translatable(...)`，英文玩家不再看到中文运维输出。
+- `lang/zh_cn.json` 与 `lang/en_us.json` 各加 3 键：`cmd.purge.done` / `cmd.move.ok` / `cmd.select.ok` → **122/122 完全对称**。
+- 余下 `Component.literal` 全部承载机器值（`session.getState().name()`、`BoardKey.describe()`、枚举名、ASCII 棋盘），不是用户文案，保留。
+
+### 测试
+
+- `GameSessionPersistenceTest` 加两条用例：
+  - `lastMoveRoundTrip`：FEN 中途写入 `51` → `52`，save → fromTag 后保持；越界值（9999 / -2）回落 `-1`；全新会话默认 `-1`。
+  - `roundTripIsStableAcrossGenerations`：把 `LastSrc` / `LastDst` 加入 `assertTagsEqual`，确保未来若字段增减漏写会立刻红。
+- 测试总数 57 → **60**（含新增的 2 + 1 调优断言），**全绿**。
+
+### 已知限制
+
+- 服务端没有实机验证（容器无 LWJGL Display + 无 EULA TTY）—— 这是本仓库一直以来的限制，音效与高亮真实表现以实机为准。
+
+---
+
+## [0.2.0] — v0.2 体验版（最近一步可旋转）
+
+- 棋盘 `BlockState.facing` 默认 `NORTH`，GUI 跟随 `viewerIsBlack XOR flipped` 翻转（参见 git `bef2909`）。
+- 棋盘可旋转（`9dcca1c`）：服务端写入 1 字节 `flipped`，客户端 `boardFlipped = viewerIsBlack ^ flipped`，朝南棋盘整体翻 180°。
+- i18n 119/119 键对称（`pvc.started` / `cmd.mode.*` / `server.*` 等）。
+- GUI 细节打包：PopupOverlay / ActionPopup 实例化、ChatBoxWidget MAX_INPUT_CHARS=200 + scissor、SpectatorListWidget scissor、PlayerAvatarCache LRU、TextSanitizer。
 
 ---
 

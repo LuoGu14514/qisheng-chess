@@ -162,6 +162,11 @@ public final class GameLogic {
         session.setSdPlayer(1 - session.getSdPlayer());
         // TLM preserves destination as the next "selected" point.
         session.setSelectPoint(dst);
+        // Record the move so the GUI can highlight src / dst, and so a
+        // reconnect / rejoin still sees the most recent move. Persisted in
+        // GameSession.save() / fromTag().
+        session.setLastMoveSource(src);
+        session.setLastMoveDest(dst);
 
         // Game-over check (TLM does not do this server-side; PVP needs it).
         GameResult result = session.checkGameOver();

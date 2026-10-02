@@ -20,6 +20,8 @@ import net.minecraft.network.FriendlyByteBuf;
  *       自方棋子且对局未结束时，服务端才会跟一段 32 字节的位图</li>
  *   <li>buf[N+6..N+37]（可选）256 格合法落点位图，每字节低位先行
  *       (256 bits = 32 bytes)。客户端可直接用，不必再调 {@code canMove}</li>
+ *   <li>buf[N+38..N+39] = lastMoveSource (short, -1 表示无最近一步)</li>
+ *   <li>buf[N+40..N+41] = lastMoveDest (short, -1 表示无最近一步)</li>
  * </ul>
  *
  * <p>客户端收到后:
@@ -41,13 +43,15 @@ public class ChessSyncS2CPacket {
         int selectPoint = buf.readShort();
         boolean hasDests = buf.readBoolean();
         boolean[] legalDests = hasDests ? LegalDestsBitmap.read(buf) : null;
+        int lastSrc = buf.readShort();
+        int lastDst = buf.readShort();
 
         var mc = Minecraft.getInstance();
         if (mc.level != null) {
             mc.execute(() -> {
 
                 if (mc.screen instanceof CChessBoardScreen screen) {
-                    screen.applySync(fen, sdPlayer, stateOrd, selectPoint, legalDests);
+                    screen.applySync(fen, sdPlayer, stateOrd, selectPoint, legalDests, lastSrc, lastDst);
                 }
             });
         }

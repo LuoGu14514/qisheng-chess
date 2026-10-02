@@ -94,6 +94,8 @@ public final class GameBroadcaster {
         int stateOrd = session.getState().ordinal();
         int selectPoint = session.getSelectPoint();
         boolean[] legalDests = computeLegalDestsForSelection(session);
+        int lastSrc = session.getLastMoveSource();
+        int lastDst = session.getLastMoveDest();
         sendToAll(level, session, ModNetwork.CHESS_SYNC, buf -> {
             buf.writeBlockPos(pos);
             buf.writeUtf(fen);
@@ -104,6 +106,8 @@ public final class GameBroadcaster {
             if (legalDests != null) {
                 LegalDestsBitmap.write(buf, legalDests);
             }
+            buf.writeShort(lastSrc);
+            buf.writeShort(lastDst);
         });
     }
 
@@ -145,6 +149,8 @@ public final class GameBroadcaster {
         int role = session.getPlayerRole(player.getUUID());
         UUID self = player.getUUID();
         boolean[] legalDests = computeLegalDestsForSelection(session);
+        int lastSrc = session.getLastMoveSource();
+        int lastDst = session.getLastMoveDest();
         // The board block's FACING (a horizontal Direction in BlockState) tells
         // the GUI whether to render flipped: SOUTH = the block's "front" faces
         // the placer's normal standing side, so the client flips the GUI 180°
@@ -164,6 +170,8 @@ public final class GameBroadcaster {
             if (legalDests != null) {
                 LegalDestsBitmap.write(buf, legalDests);
             }
+            buf.writeShort(lastSrc);
+            buf.writeShort(lastDst);
             buf.writeBoolean(flipped);
         });
     }

@@ -1,0 +1,65 @@
+启升棋 qisheng-chess — 第三方组件与许可声明 (NOTICE)
+==========================================================
+
+本项目整体以 **GNU General Public License v2.0 or later (GPL-2.0-or-later)**
+分发,因为其中内嵌的规则引擎源自 GPLv2 代码。完整许可文本见同目录的 `LICENSE`。
+
+**请勿把 `fabric.mod.json` 的 `license` 字段改回 MIT** —— GPLv2 与 MIT 不兼容,
+两者不能同时成立(见下第 1 条)。
+
+
+1. 中国象棋规则引擎 — com.qisheng.chess.engine.xqwlight
+------------------------------------------------------
+
+文件:
+    common/src/main/java/com/qisheng/chess/engine/xqwlight/Position.java
+    common/src/main/java/com/qisheng/chess/engine/xqwlight/Search.java
+    common/src/main/java/com/qisheng/chess/engine/xqwlight/Util.java
+
+来源:
+    XiangQi Wizard Light(象棋巫师 / 象眼)
+
+版权:
+    Copyright (C) 2004-2008 www.elephantbase.net
+    Copyright (C) 2004-2013 www.xqbase.com
+
+许可:
+    GNU General Public License, version 2 **or any later version**
+    (按 GPLv2 第 9 条"any later version"条款,本项目选择按 GPL-2.0-or-later 使用)
+
+说明:
+    `Position.java` 与 `Search.java` 顶部的 GPLv2 文件头是**原始声明,未作修改**;
+    `Util.java` 在原版中就没有文件头。三个文件均保持原样分发。
+    本仓库对这份引擎的改动(如有)记录在 git 历史中。
+
+    ⚠ 许可冲突的历史背景:`fabric.mod.json` 与 `QishengChess.java` 早年声明本项目为
+    MIT,与引擎自带的 GPLv2 不兼容,也不允许把 GPLv2 代码再许可成 MIT。
+    本次(v0.1.2)把整体许可改为 GPL-2.0-or-later 以反映真实情况。
+    如果你希望本项目保持 MIT,唯一合规的路径是**替换或重写这份引擎**
+    (另见 REVIEW-AND-PLAN.md 的 P0-1)。
+
+
+2. 美术资源(方块/物品材质)
+------------------------------------------------------
+
+来源:
+    TLM(Touhou Little Maid)系相关资源,作者 tartaric_acid
+
+许可:
+    CC BY-NC-SA 4.0(署名 — 非商业性使用 — 相同方式共享)
+
+说明:
+    **仅限非商业使用。** CC BY-NC-SA 4.0 的"非商业"限制与 GPL 的自由再分发条款
+    并不兼容;如果本项目将来需要商业分发,必须先替换这些材质(换成自绘或
+    CC0/CC-BY 素材)。
+
+
+3. 构建期依赖(不随本仓库再分发)
+------------------------------------------------------
+
+    Minecraft                     Mojang AB — 官方 EULA
+    Fabric Loader / Fabric API    Apache-2.0
+    Architectury API / Loom       LGPL-3.0
+    Gradle / Shadow plugin        Apache-2.0
+
+这些项目只在构建与运行时作为依赖被引用,其源码不包含在本仓库内。

@@ -5,18 +5,19 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 
 import java.util.UUID;
 
 /**
- * Compact "this side's player" badge: head-skin + name + role tag, drawn
- * symmetrically on either side of the board (red's badge bottom-left,
- * black's bottom-right — by convention; the parent Screen decides).
+ * 「本方玩家」徽章:头像 + 名字 + 身份标签。
  *
- * <p>Used both for live players and for "empty slot" placeholders. The
- * fields are not final so {@link #update(UUID, String)} can re-bind the
- * widget to a new player without churning the renderableWidgets list.
+ * <p>本类只负责画自己那块矩形,摆在哪里由父 Screen 决定 ——
+ * {@code CChessBoardScreen} 目前把红、黑两个徽章上下叠放在左侧面板里
+ * (红方在上,黑方在下),并不是棋盘两侧对称摆放。
+ *
+ * <p>既用于真实玩家,也用于「空位」占位。字段不是 final,
+ * 这样 {@link #update(UUID, String)} 就能在不重建 renderableWidgets
+ * 列表的前提下把同一个 widget 重新绑定到别的玩家。
  */
 public class PlayerBadgeWidget extends AbstractWidget {
 
@@ -41,9 +42,6 @@ public class PlayerBadgeWidget extends AbstractWidget {
         this.isYou = isYou;
     }
 
-    public UUID getPlayerId() { return playerId; }
-    public int getRole() { return role; }
-
     /** Re-bind this widget to a different player. Safe to call every tick. */
     public void update(UUID newId, String newName) {
         this.playerId = newId;
@@ -56,30 +54,38 @@ public class PlayerBadgeWidget extends AbstractWidget {
         Minecraft mc = Minecraft.getInstance();
         gfx.fill(x, y, x + w, y + h, 0xCC222222);
         int border = isYou ? FRAME_SEL : FRAME;
-        gfx.fill(x, y, x + w, y + 1, border);
-        gfx.fill(x, y + h - 1, x + w, y + h, border);
-        gfx.fill(x, y, x + 1, y + h, border);
-        gfx.fill(x + w - 1, y, x + w, y + h, border);
+        DrawUtil.border(gfx, x, y, w, h, border);
+
+        // Clip skin + text to the badge rect so a long name cannot paint over
+        // the panel border.
+        gfx.enableScissor(x, y, x + w, y + h);
 
         int headX = x + PAD_X;
         int headY = y + (h - HEAD) / 2;
-        if (playerId != null) {
-            ResourceLocation tex = PlayerAvatarCache.get(playerId);
-            gfx.blit(tex, headX, headY, HEAD, HEAD, 8.0F, 8.0F, 8, 8, 64, 64);
-            gfx.blit(tex, headX, headY, HEAD, HEAD, 40.0F, 8.0F, 8, 8, 64, 64);
-        } else {
-            gfx.fill(headX, headY, headX + HEAD, headY + HEAD, 0xFF555555);
-        }
+        DrawUtil.avatar(gfx, playerId, headX, headY, HEAD);
 
         int tx = headX + HEAD + GAP;
-        String name = (playerName == null || playerName.isEmpty())
-                ? (role == -1 ? "空位" : "?")
-                : playerName;
+        String raw = TextSanitizer.strip(playerName);
+        String name = raw.isEmpty()
+                ? (role == -1
+                        ? Component.translatable("qisheng.chess.badge.empty_slot").getString()
+                        : "?")
+                : raw;
+        int nameAvail = Math.max(8, x + w - PAD_X - tx);
+        if (mc.font.width(name) > nameAvail) {
+            name = mc.font.plainSubstrByWidth(name, nameAvail);
+        }
         int nameColor = playerName == null ? 0xFF888888 : 0xFFEFEFEF;
         gfx.drawString(mc.font, name, tx, y + PAD_Y + 2, nameColor);
-        String tag = role == 0 ? "红方" : role == 1 ? "黑方" : "旁观";
+        String tag = role == 0
+                ? Component.translatable("qisheng.chess.role.red").getString()
+                : role == 1
+                        ? Component.translatable("qisheng.chess.role.black").getString()
+                        : Component.translatable("qisheng.chess.role.spectator").getString();
         int tagColor = role == 0 ? 0xFFFF8888 : role == 1 ? 0xFFAAAAAA : 0xFF888888;
         gfx.drawString(mc.font, tag, tx, y + h - mc.font.lineHeight - PAD_Y, tagColor);
+
+        gfx.disableScissor();
     }
 
     @Override

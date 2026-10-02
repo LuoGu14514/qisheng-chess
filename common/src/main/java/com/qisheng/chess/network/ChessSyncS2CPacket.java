@@ -5,7 +5,6 @@ import dev.architectury.networking.NetworkManager.PacketContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.chat.Component;
 
 /**
  * S2C 棋盘状态同步(服务端广播给两个玩家 + 旁观者)
@@ -17,6 +16,10 @@ import net.minecraft.network.chat.Component;
  *   <li>buf[N+1]    = sdPlayer (0=红方回合,1=黑方)</li>
  *   <li>buf[N+2]    = state ordinal (0=WAITING 1=PLAYING 2=FINISHED)</li>
  *   <li>buf[N+3..4] = selectPoint (short, -1 表示未选子)</li>
+ *   <li>buf[N+5]    = {@code hasDests} byte (0/1)。仅当 selectedSq 为 sdPlayer
+ *       自方棋子且对局未结束时，服务端才会跟一段 32 字节的位图</li>
+ *   <li>buf[N+6..N+37]（可选）256 格合法落点位图，每字节低位先行
+ *       (256 bits = 32 bytes)。客户端可直接用，不必再调 {@code canMove}</li>
  * </ul>
  *
  * <p>客户端收到后:
@@ -36,26 +39,17 @@ public class ChessSyncS2CPacket {
         int sdPlayer = buf.readByte();
         int stateOrd = buf.readByte();
         int selectPoint = buf.readShort();
+        boolean hasDests = buf.readBoolean();
+        boolean[] legalDests = hasDests ? LegalDestsBitmap.read(buf) : null;
 
         var mc = Minecraft.getInstance();
         if (mc.level != null) {
             mc.execute(() -> {
 
                 if (mc.screen instanceof CChessBoardScreen screen) {
-                    screen.applySync(fen, sdPlayer, stateOrd, selectPoint);
+                    screen.applySync(fen, sdPlayer, stateOrd, selectPoint, legalDests);
                 }
             });
         }
-
-        // One-line summary for the player to confirm sync.
-        String sdStr = sdPlayer == 0 ? "红方" : "黑方";
-        String stateStr = switch (stateOrd) {
-            case 0 -> "等待玩家";
-            case 1 -> "对局中";
-            case 2 -> "已结束";
-            default -> "未知";
-        };
-        ctx.getPlayer().sendSystemMessage(Component.literal(
-                "§7[启升棋同步] " + sdStr + " | " + stateStr + " | FEN=" + fen));
     }
 }

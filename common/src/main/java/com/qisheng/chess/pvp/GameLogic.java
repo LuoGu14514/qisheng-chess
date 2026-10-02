@@ -1,5 +1,6 @@
 package com.qisheng.chess.pvp;
 
+import com.qisheng.chess.engine.ChineseChessEngine;
 import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.util.CChessUtil;
 
@@ -72,7 +73,9 @@ public final class GameLogic {
         int role = session.getPlayerRole(playerId);
         if (role != session.getSdPlayer()) return SelectOutcome.NOT_YOUR_TURN;
 
-        if (sq < 0 || sq >= 256) return SelectOutcome.OUT_OF_BOUNDS;
+        // isSquare() (not a bare 0..255 range check) — the engine's IN_BOARD /
+        // IN_FORT tables and the piece-type switch both assume a playable point.
+        if (!ChineseChessEngine.isSquare(sq)) return SelectOutcome.OUT_OF_BOUNDS;
 
         // Toggle: re-selecting the currently selected square deselects it.
         // Lets the client UX work as "click own piece to highlight; click
@@ -107,11 +110,42 @@ public final class GameLogic {
         if (role != session.getSdPlayer()) return MoveOutcome.NOT_YOUR_TURN;
 
         if (session.getSelectPoint() != src) return MoveOutcome.SOURCE_MISMATCH;
-        if (src < 0 || src >= 256 || dst < 0 || dst >= 256) return MoveOutcome.OUT_OF_BOUNDS;
+        return applyMove(session, src, dst);
+    }
+
+    /**
+     * Execute a move on behalf of whichever side is to move, with no seat check.
+     *
+     * <p>For the computer opponent ({@link PvcController}) only: the engine owns
+     * no seat, so {@link #tryMove}'s role gate could never pass for it. The gate
+     * is replaced — not removed — by
+     * {@link GameSession#isComputerToMove()}, so a routing mistake still cannot
+     * let the server move a human's piece.
+     *
+     * <p>There is deliberately no {@code SOURCE_MISMATCH} check: the engine has
+     * no selection state to match against.
+     */
+    public static MoveOutcome tryEngineMove(GameSession session, int src, int dst) {
+        if (session == null) return MoveOutcome.NOT_IN_GAME;
+        GameState state = session.getState();
+        if (state == GameState.FINISHED) return MoveOutcome.GAME_FINISHED;
+        if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
+        if (!session.isComputerToMove()) return MoveOutcome.NOT_YOUR_TURN;
+        return applyMove(session, src, dst);
+    }
+
+    /** The shared tail of every move path: validate, mutate, flip, check game-over. */
+    private static MoveOutcome applyMove(GameSession session, int src, int dst) {
+        if (!ChineseChessEngine.isSquare(src) || !ChineseChessEngine.isSquare(dst)) {
+            return MoveOutcome.OUT_OF_BOUNDS;
+        }
 
         Position p = session.getChessData();
+        // canMove() rejects src == dst, an empty/off-board source and own-piece
+        // captures before the engine's unchecked tables are touched, so a
+        // malformed packet can never throw on the server tick thread.
+        if (!ChineseChessEngine.canMove(p, src, dst)) return MoveOutcome.ILLEGAL_MOVE;
         int mv = Position.MOVE(src, dst);
-        if (!p.legalMove(mv)) return MoveOutcome.ILLEGAL_MOVE;
 
         // makeMove flips Position.sdPlayer internally via changeSide().
         // Returns false when the move would expose own king (TLM aborts here).

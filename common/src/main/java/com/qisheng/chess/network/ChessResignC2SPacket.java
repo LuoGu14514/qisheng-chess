@@ -1,5 +1,6 @@
 package com.qisheng.chess.network;
 
+import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.GameBroadcaster;
 import com.qisheng.chess.pvp.GameResult;
 import com.qisheng.chess.pvp.GameSession;
@@ -37,14 +38,14 @@ public final class ChessResignC2SPacket {
         ServerPlayer sender = (ServerPlayer) ctx.getPlayer();
         if (sender == null) return;
         SessionManager sm = SessionManager.get();
-        BlockPos pos = sm.getPlayerGame(sender.getUUID());
-        if (pos == null) {
+        BoardKey key = sm.getPlayerGame(sender.getUUID());
+        if (key == null) {
             GameBroadcaster.sendPopupTo(sender,
                     Component.literal("你不在对局中,无法认输。"),
                     PopupS2CPacket.Severity.WARN, 3);
             return;
         }
-        GameSession session = sm.get(pos);
+        GameSession session = sm.get(key);
         if (session == null) return;
         if (session.getState() != GameState.PLAYING) {
             GameBroadcaster.sendPopupTo(sender,
@@ -65,16 +66,18 @@ public final class ChessResignC2SPacket {
                     PopupS2CPacket.Severity.WARN, 3);
             return;
         }
-        ServerLevel level = sender.serverLevel();
+        // 棋盘可能在别的维度:广播一律用棋盘所在的世界。
+        ServerLevel boardLevel = SessionManager.resolve(sender.getServer(), key, sender.serverLevel());
+        BlockPos pos = key.pos();
         session.setResult(result);
         session.setState(GameState.FINISHED);
-        sm.cancelDraw(pos);
-        GameBroadcaster.broadcastGameOver(level, session, pos, result);
+        sm.cancelDraw(key);
+        GameBroadcaster.broadcastGameOver(boardLevel, session, pos, result);
         // Per-recipient popup naming the resigning player so the winner sees
         // "X 已认输" and the loser sees the same.
         Component msg = Component.literal(sender.getName().getString() + " 认输 — "
                 + (result == GameResult.RED_WIN ? "红方胜" : "黑方胜"));
-        GameBroadcaster.broadcastPopup(level, session, msg,
+        GameBroadcaster.broadcastPopup(boardLevel, session, msg,
                 PopupS2CPacket.Severity.INFO, 0);
     }
 }

@@ -19,6 +19,8 @@ import java.util.UUID;
  *  - buf[N+2]    = state ordinal
  *  - buf[N+3..4] = selectPoint (short)
  *  - buf[N+5]    = myRole byte (-1=旁观,0=红,1=黑)
+ *  - buf[N+6]    = {@code hasDests} byte (0/1)，仅当服务端下发了合法落点位图时为 1
+ *  - buf[N+7..N+38]（可选）256 格合法落点位图，与 {@link ChessSyncS2CPacket} 同格式
  *
  * 客户端收到后,必须通过 {@link Minecraft#execute(Runnable)} 把
  * {@code setScreen} 派发到渲染线程执行。Architectury 的 S2C 接收回调
@@ -36,6 +38,8 @@ public class ChessOpenScreenS2CPacket {
         int stateOrd = buf.readByte();
         int selectPoint = buf.readShort();
         int myRole = buf.readByte();   // -1=spec, 0=red, 1=black
+        boolean hasDests = buf.readBoolean();
+        boolean[] legalDests = hasDests ? LegalDestsBitmap.read(buf) : null;
 
         var mc = Minecraft.getInstance();
         if (mc.player == null) return;
@@ -44,6 +48,7 @@ public class ChessOpenScreenS2CPacket {
         // send() enqueue to the render-thread task queue; execute() is the
         // post-1.19.4 preferred name (send() is an alias).
         mc.execute(() -> mc.setScreen(
-                new CChessBoardScreen(pos, self, fen, sdPlayer, stateOrd, selectPoint, myRole)));
+                new CChessBoardScreen(pos, self, fen, sdPlayer, stateOrd, selectPoint, myRole,
+                        legalDests)));
     }
 }

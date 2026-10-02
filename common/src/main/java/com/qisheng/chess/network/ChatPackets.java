@@ -1,6 +1,7 @@
 package com.qisheng.chess.network;
 
 import com.qisheng.chess.client.CChessBoardScreen;
+import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.GameBroadcaster;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.SessionManager;
@@ -21,7 +22,18 @@ import java.util.UUID;
  */
 public final class ChatPackets {
 
-    public static final int MAX_LEN = 64;
+    /**
+     * Wire limit, in <b>UTF-8 bytes</b> — not characters.
+     *
+     * <p>{@code FriendlyByteBuf.writeUtf(s, max)} compares
+     * {@code ByteBufUtil.utf8MaxBytes(s)} against {@code max}, so the old value of
+     * 64 silently meant "about 21 Chinese characters": typing a longer line and
+     * pressing Enter threw {@code EncoderException} out of {@code keyPressed} and
+     * crashed the client. 256 bytes ≈ 85 CJK characters, which is a comfortable
+     * one-line limit. The client clamps to {@code min(MAX_LEN, 256)} bytes before
+     * sending, so both sides stay in sync — keep them equal if you change this.
+     */
+    public static final int MAX_LEN = 256;
 
     private ChatPackets() {}
 
@@ -43,18 +55,20 @@ public final class ChatPackets {
             text = text.trim();
             if (text.isEmpty()) return;
             SessionManager sm = SessionManager.get();
-            BlockPos pos = sm.getPlayerGame(sender.getUUID());
-            if (pos == null) pos = sm.getPlayerSpectating(sender.getUUID());
-            if (pos == null) {
+            BoardKey key = sm.getPlayerGame(sender.getUUID());
+            if (key == null) key = sm.getPlayerSpectating(sender.getUUID());
+            if (key == null) {
                 GameBroadcaster.sendPopupTo(sender,
                         Component.literal("你不在对局中,无法发评论。"),
                         PopupS2CPacket.Severity.WARN, 3);
                 return;
             }
-            GameSession session = sm.get(pos);
+            GameSession session = sm.get(key);
             if (session == null) return;
-            ServerLevel level = sender.serverLevel();
-            broadcast(level, session, pos, sender.getUUID(), text);
+            // 棋盘可能在别的维度:评论只发给棋盘所在世界里的对局参与者。
+            BlockPos pos = key.pos();
+            ServerLevel boardLevel = SessionManager.resolve(sender.getServer(), key, sender.serverLevel());
+            broadcast(boardLevel, session, pos, sender.getUUID(), text);
         }
 
         public static void broadcast(ServerLevel level, GameSession session, BlockPos pos,

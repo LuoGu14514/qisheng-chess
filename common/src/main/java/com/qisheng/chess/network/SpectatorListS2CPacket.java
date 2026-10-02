@@ -30,6 +30,18 @@ import java.util.UUID;
  */
 public class SpectatorListS2CPacket {
 
+    /**
+     * Upper bound for the spectator count on the wire.
+     *
+     * <p>The decoder allocates an array from the incoming {@code int}, so an
+     * unbounded value let anyone with a connection OOM the client. No real
+     * server exceeds this, and the encoder clamps to it as well.
+     */
+    public static final int MAX_SPECTATORS = 4096;
+
+    /** Minecraft usernames are ≤16 chars; 64 bytes is a generous, bounded wire cap. */
+    private static final int NAME_MAX_BYTES = 64;
+
     public static class PlayerEntry {
         public final UUID id;
         public final String name;
@@ -53,34 +65,59 @@ public class SpectatorListS2CPacket {
         BlockPos p = buf.readBlockPos();
         PlayerEntry red = null, black = null;
         if (buf.readBoolean()) {
-            red = new PlayerEntry(buf.readUUID(), buf.readUtf());
+            red = new PlayerEntry(buf.readUUID(), buf.readUtf(NAME_MAX_BYTES));
         }
         if (buf.readBoolean()) {
-            black = new PlayerEntry(buf.readUUID(), buf.readUtf());
+            black = new PlayerEntry(buf.readUUID(), buf.readUtf(NAME_MAX_BYTES));
         }
         int n = buf.readInt();
+        // Bound before allocating: a malformed or hostile header used to let the
+        // sender pick an arbitrary length and OOM the client. A Minecraft server
+        // cannot have more players than this, so anything larger is bogus.
+        if (n < 0 || n > MAX_SPECTATORS) {
+            throw new io.netty.handler.codec.DecoderException(
+                    "spectator count out of range: " + n);
+        }
         PlayerEntry[] specs = new PlayerEntry[n];
         for (int i = 0; i < n; i++) {
-            specs[i] = new PlayerEntry(buf.readUUID(), buf.readUtf());
+            specs[i] = new PlayerEntry(buf.readUUID(), buf.readUtf(NAME_MAX_BYTES));
         }
         return new Roster(p, red, black, specs);
     }
 
-    /** Encode a roster to a fresh buf — used by {@link com.qisheng.chess.pvp.GameBroadcaster}. */
+    /**
+     * Encode a roster into a fresh buf.
+     *
+     * <p>Kept for callers that own the buffer. Broadcasting must use
+     * {@link #writeInto} instead so every recipient gets its own buffer —
+     * see the class javadoc of {@link com.qisheng.chess.pvp.GameBroadcaster}.
+     */
     public static FriendlyByteBuf write(BlockPos pos, PlayerEntry red, PlayerEntry black, PlayerEntry[] specs) {
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        writeInto(buf, pos, red, black, specs);
+        return buf;
+    }
+
+    /** Encode a roster into a caller-provided buffer. */
+    public static void writeInto(FriendlyByteBuf buf, BlockPos pos, PlayerEntry red, PlayerEntry black,
+                                 PlayerEntry[] specs) {
         buf.writeBlockPos(pos);
         buf.writeBoolean(red != null);
-        if (red != null) { buf.writeUUID(red.id); buf.writeUtf(red.name == null ? "" : red.name); }
+        if (red != null) { buf.writeUUID(red.id); buf.writeUtf(clamp(red.name)); }
         buf.writeBoolean(black != null);
-        if (black != null) { buf.writeUUID(black.id); buf.writeUtf(black.name == null ? "" : black.name); }
-        int n = specs == null ? 0 : specs.length;
+        if (black != null) { buf.writeUUID(black.id); buf.writeUtf(clamp(black.name)); }
+        int n = specs == null ? 0 : Math.min(specs.length, MAX_SPECTATORS);
         buf.writeInt(n);
         for (int i = 0; i < n; i++) {
             buf.writeUUID(specs[i].id);
-            buf.writeUtf(specs[i].name == null ? "" : specs[i].name);
+            buf.writeUtf(clamp(specs[i].name));
         }
-        return buf;
+    }
+
+    /** Minecraft usernames cap at 16 chars; the wire limit is 32767 but be tidy. */
+    private static String clamp(String s) {
+        if (s == null) return "";
+        return s.length() <= 64 ? s : s.substring(0, 64);
     }
 
     public static void receive(FriendlyByteBuf buf, PacketContext ctx) {

@@ -1,25 +1,21 @@
 package com.qisheng.chess.util;
 
 import com.qisheng.chess.engine.xqwlight.Position;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.world.phys.Vec3;
 
 /**
  * 中象工具方法
  *
  * 一部分是 TLM 原仓库照搬(TartaricAcid/TouhouLittleMaid 1.18.2, MIT):
  *   - INIT FEN
- *   - isRed / isBlack / isPlayer / isMaid
+ *   - isRed
  *   - reachMoveLimit / isRepeat
  *
- * 另一部分是 qisheng-chess 单方块棋盘的简化版本:
- *   - getClickSquare: 把顶面 9×10 网格点击映射到 0x33..0xCB 棋盘格子
- *   - squareCenter: 反向,把棋盘格子映射回世界坐标(用于撒粒子)
+ * 另一部分是 qisheng-chess 自己的:
  *   - boardToAscii: 整盘 ASCII 表示,自动推到聊天,玩家不用记初始 FEN
  *
- * TLM 原本的 getClickPosition 是给 3×3 多方块棋盘用的(常量 1.365 / 0.304),
- * 单方块棋盘不适用,所以我们走更简单的顶面网格化方案。
+ * 原先还有一批服务于「单方块棋盘顶面」的方法(getClickSquare / squareCenter /
+ * piecesIndex / isBlack / isPlayer / isMaid),随提交 77174bd
+ * "Remove live-on-block board surface renderer" 一起失效,已删除。
  */
 public final class CChessUtil {
     // 女仆必输残局，测试用
@@ -29,40 +25,6 @@ public final class CChessUtil {
     // 六十回合自然限着
     // 3aka3/9/9/9/9/9/9/9/9/3AKA3
     public static final String INIT = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR";
-
-    /**
-     * 把顶面点击位置映射到棋盘格子 (0x33..0xCB)。仅接受顶面点击 (Direction.UP)。
-     *
-     * 顶面坐标系 (block-local):
-     *   - localX ∈ [0, 1] 对应 file 0..8 (9 路)
-     *   - localZ ∈ [0, 1] 对应 rank 0..9 (10 行)
-     *
-     * 玩家站在棋盘旁边 → 击中侧面 → 返回 -1,提示玩家俯视棋盘。
-     *
-     * @return 棋盘格索引 (0x33..0xCB),或 -1 表示点击无效。
-     */
-    public static int getClickSquare(Vec3 hitPos, BlockPos pos, Direction hitDir) {
-        if (hitDir != Direction.UP) return -1;
-        double localX = hitPos.x - pos.getX();
-        double localZ = hitPos.z - pos.getZ();
-        if (localX < 0.0 || localX > 1.0 || localZ < 0.0 || localZ > 1.0) return -1;
-        int file = (int) Math.floor(localX * 9);
-        int rank = (int) Math.floor(localZ * 10);
-        if (file < 0 || file > 8 || rank < 0 || rank > 9) return -1;
-        return Position.COORD_XY(file + Position.FILE_LEFT, rank + Position.RANK_TOP);
-    }
-
-    /**
-     * 反向映射:棋盘格子 → 格子中心的方块世界坐标 (XZ, 顶面 Y = pos.y + 1)。
-     * 用于在选中的格子中心撒粒子。
-     */
-    public static Vec3 squareCenter(BlockPos pos, int sq) {
-        int file = sq & 0xF;
-        int rank = (sq >> 4) & 0xF;
-        double localX = (file - Position.FILE_LEFT + 0.5) / 9.0;
-        double localZ = (rank - Position.RANK_TOP + 0.5) / 10.0;
-        return new Vec3(pos.getX() + localX, pos.getY() + 1.05, pos.getZ() + localZ);
-    }
 
     /**
      * 整盘 ASCII 表示 — 玩家看不到真实棋盘,所以服务器把当前局面推到聊天。
@@ -132,24 +94,12 @@ public final class CChessUtil {
         return isRed ? letter : letter.toLowerCase();
     }
 
-    public static byte piecesIndex(int x, int y, byte[] data) {
-        return data[Position.COORD_XY(x, y)];
-    }
-
-    public static boolean isRed(byte piecesIndex) {
-        return (piecesIndex & 8) == 8;
-    }
-
-    public static boolean isBlack(byte piecesIndex) {
-        return (piecesIndex & 16) == 16;
-    }
-
-    public static boolean isPlayer(Position position) {
-        return position.sdPlayer == 0;
-    }
-
-    public static boolean isMaid(Position position) {
-        return position.sdPlayer == 1;
+    /**
+     * 红方棋子判定:位 3(值 8)为红。参数是 {@code Position.squares[]} 里的
+     * 棋子字节(红 = 种类 + 8,黑 = 种类 + 16),不是格子下标、也不是种类序号。
+     */
+    public static boolean isRed(byte piece) {
+        return (piece & 8) == 8;
     }
 
     // 六十回自然限着

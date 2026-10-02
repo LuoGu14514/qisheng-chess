@@ -3,10 +3,10 @@
     "id": "qisheng_chess",
     "version": "${version}",
     "name": "Qisheng Chess",
-    "description": "Independent PVP mod for Chinese Chess. Code: MIT. Assets: CC BY-NC-SA 4.0 (from TLM by tartaric_acid). Non-commercial use only.",
+    "description": "Independent PVP mod for Chinese Chess. Licensed GPL-2.0-or-later: the bundled xqwlight rule engine (XiangQi Wizard Light, (C) 2004-2013 elephantbase.net / xqbase.com) is GPLv2, which is incompatible with the MIT terms this mod used to claim. Assets are CC BY-NC-SA 4.0 (from TLM by tartaric_acid) - non-commercial use only. See LICENSE and NOTICE.",
     "authors": ["light_shade_wind"],
     "contact": {},
-    "license": "MIT",
+    "license": "GPL-2.0-or-later",
     "environment": "*",
     "entrypoints": {
         "main": ["com.qisheng.chess.fabric.QishengChessFabric"],

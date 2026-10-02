@@ -7,10 +7,10 @@ import net.minecraft.network.chat.Component;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Iterator;
 
 /**
- * Client-side singleton that renders stacked in-GUI pop-up chips at the
- * top-centre of the active {@link net.minecraft.client.gui.screens.Screen}.
+ * Stack of in-GUI pop-up chips at the top-centre of the chess board GUI.
  *
  * <p>Replaces the old "spam chat with [qisheng] ..." messages that the
  * server used to send via {@code sendSystemMessage}. All server-side
@@ -24,13 +24,26 @@ import java.util.Deque;
  *   <li>WARN / ERROR chips stick until the player clicks them, then dismiss.</li>
  *   <li>One dismiss = one chip; click position is matched to the chip rect.</li>
  *   <li>Limit: 6 visible chips. Older ones drop off the bottom.</li>
+ *   <li>A click that dismisses a chip is <b>consumed</b> ({@code true}), so it
+ *       can no longer fall through and play a board move.</li>
  * </ul>
  *
- * <p>Render integration: lives in {@code CChessBoardScreen.render()} (only
- * screen with this GUI), so we don't need a mixin to inject into the
- * global HUD pipeline. Anywhere else (main HUD, pause menu, etc.) the
- * overlay is hidden — which is what we want, since the chess prompts
- * only make sense while looking at a board.
+ * <h2>Lifetime</h2>
+ * The stack is <b>instance</b> state owned by {@link CChessBoardScreen} — one
+ * stack per screen. It used to be a {@code static} deque that was never
+ * cleared, so a sticky WARN / ERROR chip followed the player onto the next
+ * board GUI (and {@code clear()} had zero call sites); the screen now drops
+ * the stack in {@link CChessBoardScreen#removed()}.
+ *
+ * <p>{@link #show} stays static because the network layer holds no screen
+ * reference: it routes the chip to the board GUI that is open right now. With
+ * no board GUI up there is nowhere to paint it, so the chip is dropped rather
+ * than left behind for the next screen to inherit.
+ *
+ * <p>Render integration: called from {@code CChessBoardScreen.render()} (the
+ * only screen with this GUI), so no mixin into the global HUD pipeline is
+ * needed. Anywhere else (main HUD, pause menu, …) the overlay is invisible —
+ * which is what we want, since chess prompts only make sense at a board.
  */
 public final class PopupOverlay {
 
@@ -38,78 +51,103 @@ public final class PopupOverlay {
     private static final int MAX_VISIBLE = 6;
     /** Default auto-dismiss for INFO chips when caller passed 0. */
     private static final int DEFAULT_AUTO_SEC = 3;
+    /** Default first pixel row of the stack. */
+    public static final int DEFAULT_TOP = 8;
     /** Chip layout. */
     private static final int CHIP_PAD_X = 10;
     private static final int CHIP_PAD_Y = 6;
     private static final int CHIP_GAP   = 4;
 
-    private static final Deque<Chip> ACTIVE = new ArrayDeque<>();
+    private final Deque<Chip> active = new ArrayDeque<>();
 
-    private PopupOverlay() {}
+    public PopupOverlay() {}
 
     /**
-     * Push a chip. {@code autoSec == 0} uses the default for INFO chips and
-     * means "stick until clicked" for WARN / ERROR.
+     * Push a chip onto this screen's stack. {@code autoSec == 0} uses the
+     * default for INFO chips and means "stick until clicked" for
+     * WARN / ERROR.
      */
-    public static void show(Component text, PopupS2CPacket.Severity sev, int autoSec) {
+    public void push(Component text, PopupS2CPacket.Severity sev, int autoSec) {
         if (text == null) return;
         int seconds = autoSec > 0 ? autoSec
                        : (sev == PopupS2CPacket.Severity.INFO ? DEFAULT_AUTO_SEC : 0);
-        ACTIVE.addFirst(new Chip(text, sev, seconds));
-        while (ACTIVE.size() > MAX_VISIBLE) ACTIVE.removeLast();
+        active.addFirst(new Chip(text, sev, seconds));
+        while (active.size() > MAX_VISIBLE) active.removeLast();
+    }
+
+    /**
+     * Static entry point for the network layer
+     * ({@link com.qisheng.chess.network.PopupS2CPacket}), which has no screen
+     * reference. Delivers to the board GUI that is currently open; drops the
+     * chip when there is none (see the class javadoc).
+     */
+    public static void show(Component text, PopupS2CPacket.Severity sev, int autoSec) {
+        if (text == null) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.screen instanceof CChessBoardScreen screen) {
+            screen.popups.push(text, sev, autoSec);
+        }
     }
 
     /** Advance dismiss timers. */
-    public static void tick() {
-        if (ACTIVE.isEmpty()) return;
+    public void tick() {
+        if (active.isEmpty()) return;
         long now = System.currentTimeMillis();
-        ACTIVE.removeIf(c -> c.shouldDismiss(now));
+        active.removeIf(c -> c.expiresAt > 0 && now >= c.expiresAt);
     }
 
-    /** Wipe all active chips (used when leaving the GUI). */
-    public static void clear() { ACTIVE.clear(); }
+    /** Wipe all active chips (screen teardown). */
+    public void clear() { active.clear(); }
 
     /**
-     * Render all chips inside the given Screen's viewport. Anchor: top-centre
+     * Render all chips inside the given screen viewport. Anchor: top-centre
      * of the visible area. Chips stack downward; the newest is at the top.
      *
      * <p>Intended to be called at the very end of
      * {@link net.minecraft.client.gui.screens.Screen#render} so the chips
      * paint over everything else (including the chess board).
+     *
+     * @param topY first pixel row of the stack — the screen pushes this below
+     *             an active {@link ActionPopup} so the two stacks, whose
+     *             hit-boxes both sit centre-screen, cannot overlap.
      */
-    public static void render(GuiGraphics gfx, int screenWidth) {
-        if (ACTIVE.isEmpty()) return;
+    public void render(GuiGraphics gfx, int screenWidth, int topY) {
+        if (active.isEmpty()) return;
         Minecraft mc = Minecraft.getInstance();
-        int y = 8;
-        for (Chip c : ACTIVE) {
+        int y = topY;
+        for (Chip c : active) {
             int w = mc.font.width(c.text);
             int chipW = w + 2 * CHIP_PAD_X;
             int chipH = mc.font.lineHeight + 2 * CHIP_PAD_Y;
             int x0 = (screenWidth - chipW) / 2;
             int bg = c.severity.bgArgb();
             int border = c.severity.borderArgb();
-            gfx.fill(x0 - 1, y - 1, x0 + chipW + 1, y + chipH + 1, border);
-            gfx.fill(x0, y, x0 + chipW, y + chipH, bg);
+            DrawUtil.outline(gfx, x0, y, chipW, chipH, border, bg);
             gfx.drawString(mc.font, c.text, x0 + CHIP_PAD_X, y + CHIP_PAD_Y, c.severity.textArgb());
             // Store rect for click hit-test.
             c.x0 = x0; c.y0 = y; c.x1 = x0 + chipW; c.y1 = y + chipH;
+            c.placed = true;
             y += chipH + CHIP_GAP;
         }
     }
 
     /**
-     * Returns true if a chip was dismissed by this click (so the caller
-     * can stop further propagation if desired).
+     * Dismiss the chip under the cursor, if any.
+     *
+     * @return {@code true} when a chip was actually dismissed — the caller
+     *         must swallow that click instead of letting it reach the board.
      */
-    public static boolean mouseClicked(double mx, double my, int button) {
-        if (button != 0) return false;
-        ACTIVE.removeIf(c -> {
+    public boolean mouseClicked(double mx, double my, int button) {
+        if (button != 0 || active.isEmpty()) return false;
+        Iterator<Chip> it = active.iterator();
+        while (it.hasNext()) {
+            Chip c = it.next();
+            if (!c.placed) continue;   // rect is only meaningful after a render
             if (c.x0 <= mx && mx <= c.x1 && c.y0 <= my && my <= c.y1) {
-                c.dismissed = true;
+                it.remove();
                 return true;
             }
-            return false;
-        });
+        }
         return false;
     }
 
@@ -119,9 +157,12 @@ public final class PopupOverlay {
         final Component text;
         final PopupS2CPacket.Severity severity;
         final long expiresAt;       // 0 = stick
-        boolean dismissed = false;
-        // Rect captured during last render (so click hit-test uses the
-        // same coordinates the user sees).
+        /**
+         * Rect captured during the last render. {@code placed} guards the
+         * first frame: before it, the rect is still 0,0,0,0 and a click in
+         * the top-left corner would dismiss an invisible chip.
+         */
+        boolean placed = false;
         int x0, y0, x1, y1;
 
         Chip(Component text, PopupS2CPacket.Severity sev, int autoSec) {
@@ -130,10 +171,6 @@ public final class PopupOverlay {
             this.expiresAt = autoSec > 0
                     ? System.currentTimeMillis() + autoSec * 1000L
                     : 0L;
-        }
-
-        boolean shouldDismiss(long now) {
-            return dismissed || (expiresAt > 0 && now >= expiresAt);
         }
     }
 }

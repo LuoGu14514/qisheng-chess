@@ -4,8 +4,9 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.network.PopupS2CPacket;
-import com.qisheng.chess.pvp.BoardMessages;
+import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.BoardMode;
 import com.qisheng.chess.pvp.GameBroadcaster;
 import com.qisheng.chess.pvp.GameLogic;
@@ -15,9 +16,6 @@ import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.GameState;
 import com.qisheng.chess.pvp.SessionManager;
 import com.qisheng.chess.util.CChessUtil;
-
-import java.util.UUID;
-
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
@@ -25,34 +23,47 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.UUID;
+
 /**
- * /qisheng command registration (common entry).
+ * {@code /qisheng} 命令注册(common 入口)。
  * <ul>
- *   <li>/qisheng move &lt;src&gt; &lt;dst&gt; — play a move (CLI fallback to right-click)</li>
- *   <li>/qisheng select &lt;sq&gt; — select a square (CLI fallback)</li>
- *   <li>/qisheng reset — reset current board</li>
- *   <li>/qisheng board — print current board as ASCII</li>
- *   <li>/qisheng status — print compact game state</li>
- *   <li>/qisheng leave — leave the current game / stop spectating</li>
+ *   <li>{@code /qisheng move <src> <dst>} — 走子(右键的 CLI 后备)</li>
+ *   <li>{@code /qisheng select <sq>} — 选子(CLI 后备)</li>
+ *   <li>{@code /qisheng reset} — 重置当前棋盘</li>
+ *   <li>{@code /qisheng board} — 以 ASCII 打印当前棋盘(唯一还会走聊天的盘面输出)</li>
+ *   <li>{@code /qisheng status} — 打印紧凑对局状态</li>
+ *   <li>{@code /qisheng leave} — 离场 / 停止旁观</li>
+ *   <li>{@code /qisheng takeover red|black} — 接手空位</li>
+ *   <li>{@code /qisheng mode pvp|pvc} — <b>需要权限等级 2</b>:改的是全局单例</li>
+ *   <li>{@code /qisheng purge} — <b>需要权限等级 2</b>:清空所有会话(管理员用)</li>
  * </ul>
  *
- * <p>The right-click block flow is the primary input; CLI commands exist as
- * a fallback for testing / power use. All move / select logic is delegated
- * to {@link GameLogic} so the CLI, C2S packet, and right-click paths
- * cannot drift. Roster-changing operations also call
- * {@link GameBroadcaster#broadcastRoster} so the spectator list / player
- * badges update everywhere.
+ * <p><b>坐标约定</b>:{@code <sq>} 与 {@code /qisheng board} 打印出来的行号一致 ——
+ * 0..8 = 最下面一行(标 0),72..80 = 最上面一行(标 9),{@code sq % 9} 是 a..i 列。
+ * 这与 GUI 内部的方格编码不同,{@link #visualToInternal(int)} 负责换算。
+ *
+ * <p>右键方块是主要输入方式;CLI 是测试/高级用法。所有走子/选子逻辑都委托给
+ * {@link GameLogic},因此 CLI、C2S 包、右键三条路径不会走偏。改变名单的操作
+ * 还会调用 {@link GameBroadcaster#broadcastRoster},让旁观列表/玩家徽章处处同步。
  */
 public class ModCommands {
+
+    /** 权限等级 2 = 管理员(op)。破坏性/全局性的子命令必须要求它。 */
+    private static final int OP_LEVEL = 2;
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(
                 Commands.literal("qisheng")
                         .then(Commands.literal("mode")
+                                .requires(src -> src.hasPermission(OP_LEVEL))
                                 .then(Commands.literal("pvp")
                                         .executes(ctx -> setMode(ctx, BoardMode.PVP)))
                                 .then(Commands.literal("pvc")
                                         .executes(ctx -> setMode(ctx, BoardMode.PVC))))
+                        .then(Commands.literal("purge")
+                                .requires(src -> src.hasPermission(OP_LEVEL))
+                                .executes(ModCommands::doPurge))
                         .then(Commands.literal("move")
                                 .then(Commands.argument("src", IntegerArgumentType.integer(0, 89))
                                         .then(Commands.argument("dst", IntegerArgumentType.integer(0, 89))
@@ -79,40 +90,76 @@ public class ModCommands {
         );
     }
 
+    // ---- helpers ----
+
+    /** 命令解析出来的"这一局":会话 + 它所在的维度 + 方块坐标。 */
+    private record Target(GameSession session, ServerLevel level, BlockPos pos) {}
+
+    /**
+     * Resolve the board the player is playing at, in the player's own dimension,
+     * falling back to the player's current level if the board's dimension is gone.
+     */
+    private static Target resolvePlaying(ServerPlayer player, boolean allowSpectating) {
+        SessionManager sm = SessionManager.get();
+        UUID id = player.getUUID();
+        BoardKey key = sm.getPlayerGame(id);
+        if (key == null && allowSpectating) key = sm.getPlayerSpectating(id);
+        if (key == null) return null;
+        GameSession session = sm.get(key);
+        if (session == null) return null;
+        ServerLevel level = SessionManager.resolve(player.getServer(), key, player.serverLevel());
+        if (level == null) return null;
+        return new Target(session, level, key.pos());
+    }
+
     // ---- handlers ----
 
     private static int setMode(CommandContext<CommandSourceStack> ctx, BoardMode mode) {
         SessionManager.get().setGlobalMode(mode);
-        ctx.getSource().sendSystemMessage(Component.literal("[qisheng] Global mode set to " + mode));
+        ctx.getSource().sendSystemMessage(Component.translatable(
+                "qisheng.chess.cmd.mode.changed",
+                Component.translatable(mode == BoardMode.PVC
+                        ? "qisheng.chess.cmd.mode.label_pvc"
+                        : "qisheng.chess.cmd.mode.label_pvp")));
+        // SessionManager stamps globalMode in newSession(), so this only affects
+        // boards created (or reset) after this point. Say so — changing the mode
+        // under a game in progress would change the rules mid-match.
+        ctx.getSource().sendSystemMessage(Component.translatable(mode == BoardMode.PVC
+                ? "qisheng.chess.mode.pvc"
+                : "qisheng.chess.mode.pvp"));
+        return 1;
+    }
+
+    /** 管理员:丢弃全部会话(服务器停止钩子也调用同一段逻辑)。 */
+    private static int doPurge(CommandContext<CommandSourceStack> ctx) {
+        int before = SessionManager.get().sessionCount();
+        SessionManager.get().resetAll();
+        ctx.getSource().sendSystemMessage(Component.literal("[qisheng] 已清空 " + before + " 个棋盘会话。"));
         return 1;
     }
 
     private static int doMove(CommandContext<CommandSourceStack> ctx, int src, int dst) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
-        BlockPos pos = SessionManager.get().getPlayerGame(player.getUUID());
-        if (pos == null) {
-            ctx.getSource().sendFailure(Component.literal("[qisheng] You are not in a chess game."));
+        Target t = resolvePlaying(player, false);
+        if (t == null) {
+            ctx.getSource().sendFailure(Component.translatable("qisheng.chess.cmd.not_in_game"));
             return 0;
         }
-        ServerLevel level = player.serverLevel();
-        GameSession session = SessionManager.get().get(pos);
-        if (session == null) return 0;
-
-        GameLogic.MoveOutcome out = GameLogic.tryMove(session, player.getUUID(), src, dst);
+        GameLogic.MoveOutcome out = GameLogic.tryMove(t.session(), player.getUUID(), src, dst);
         switch (out) {
             case OK -> {
                 ctx.getSource().sendSystemMessage(Component.literal(
-                        "[qisheng] Moved " + src + " -> " + dst));
-                GameResult result = session.getResult();
+                        "[qisheng] 已走子 " + src + " -> " + dst));
+                GameResult result = t.session().getResult();
                 if (result != GameResult.ONGOING) {
-                    GameBroadcaster.broadcastGameOver(level, session, pos, result);
+                    GameBroadcaster.broadcastGameOver(t.level(), t.session(), t.pos(), result);
                 } else {
-                    GameBroadcaster.broadcastSync(level, session, pos);
+                    GameBroadcaster.broadcastSync(t.level(), t.session(), t.pos());
                 }
                 return 1;
             }
             default -> {
-                GameBroadcaster.broadcastSync(level, session, pos);
+                GameBroadcaster.broadcastSync(t.level(), t.session(), t.pos());
                 ctx.getSource().sendFailure(GameMessages.describeMove(out));
                 return 0;
             }
@@ -121,21 +168,18 @@ public class ModCommands {
 
     private static int doSelect(CommandContext<CommandSourceStack> ctx, int sq) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
-        BlockPos pos = SessionManager.get().getPlayerGame(player.getUUID());
-        if (pos == null) {
-            ctx.getSource().sendFailure(Component.literal("[qisheng] You are not in a chess game."));
+        Target t = resolvePlaying(player, false);
+        if (t == null) {
+            ctx.getSource().sendFailure(Component.translatable("qisheng.chess.cmd.not_in_game"));
             return 0;
         }
-        GameSession session = SessionManager.get().get(pos);
-        if (session == null) return 0;
-
-        ServerLevel level = player.serverLevel();
-        GameLogic.SelectOutcome out = GameLogic.trySelect(session, player.getUUID(), sq);
-        GameBroadcaster.broadcastSync(level, session, pos);
+        GameLogic.SelectOutcome out = GameLogic.trySelect(t.session(), player.getUUID(), sq);
+        GameBroadcaster.broadcastSync(t.level(), t.session(), t.pos());
         if (out == GameLogic.SelectOutcome.OK) {
+            byte pc = t.session().getChessData().squares[sq];
             ctx.getSource().sendSystemMessage(Component.literal(
-                    "[qisheng] Selected " + sq + " (piece " + session.getChessData().squares[sq]
-                            + "), use /qisheng move " + sq + " <dst>"));
+                    "[qisheng] 已选中方格 " + sq + "(棋子字节 " + pc
+                            + "),用 /qisheng move <src> <dst> 走子。"));
             return 1;
         }
         ctx.getSource().sendFailure(GameMessages.describeSelect(out));
@@ -144,16 +188,26 @@ public class ModCommands {
 
     private static int doReset(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
-        BlockPos pos = SessionManager.get().getPlayerGame(player.getUUID());
-        if (pos == null) {
-            ctx.getSource().sendFailure(Component.literal("[qisheng] You are not in a chess game."));
+        SessionManager sm = SessionManager.get();
+
+        // 优先重置"自己坐着的那一局";否则(旁观者/管理员)需要权限。
+        BoardKey key = sm.getPlayerGame(player.getUUID());
+        if (key == null) {
+            key = sm.getPlayerSpectating(player.getUUID());
+            if (key == null) {
+                ctx.getSource().sendFailure(Component.translatable("qisheng.chess.cmd.not_in_game"));
+                return 0;
+            }
+        }
+        GameSession session = sm.get(key);
+        if (session == null) {
+            ctx.getSource().sendFailure(Component.translatable("qisheng.chess.cmd.session_gone"));
             return 0;
         }
-        ServerLevel level = player.serverLevel();
-        GameSession session = SessionManager.get().get(pos);
-        if (session == null) return 0;
+        ServerLevel level = SessionManager.resolve(player.getServer(), key, player.serverLevel());
+        if (level == null) return 0;
+        BlockPos pos = key.pos();
 
-        SessionManager sm = SessionManager.get();
         if (session.getRedPlayer() != null) sm.evictPlayer(session.getRedPlayer());
         if (session.getBlackPlayer() != null) sm.evictPlayer(session.getBlackPlayer());
 
@@ -168,69 +222,79 @@ public class ModCommands {
         GameBroadcaster.broadcastSync(level, session, pos);
         GameBroadcaster.broadcastRoster(level, session, pos);
         GameBroadcaster.sendPopupTo(player,
-                Component.literal("棋盘已重置。"),
+                Component.translatable("qisheng.chess.cmd.reset.done"),
                 PopupS2CPacket.Severity.INFO, 3);
         return 1;
     }
 
     private static int doBoard(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
-        BlockPos pos = SessionManager.get().getPlayerGame(player.getUUID());
-        if (pos == null) pos = SessionManager.get().getPlayerSpectating(player.getUUID());
-        if (pos == null) {
-            ctx.getSource().sendSystemMessage(Component.literal("[qisheng] You are not in a chess game or spectating."));
+        Target t = resolvePlaying(player, true);
+        if (t == null) {
+            ctx.getSource().sendSystemMessage(Component.translatable("qisheng.chess.cmd.not_in_game_idle"));
             return 1;
         }
-        GameSession session = SessionManager.get().get(pos);
-        if (session == null) {
-            ctx.getSource().sendSystemMessage(Component.literal("[qisheng] Session not found."));
-            return 1;
-        }
-        ctx.getSource().sendSystemMessage(Component.literal(CChessUtil.boardToAscii(session.getChessData())));
-        int role = session.getPlayerRole(player.getUUID());
-        String turn = session.getSdPlayer() == 0 ? "红方" : "黑方";
-        String yourTurn = (role == session.getSdPlayer()) ? " ← 你走子" : " (等待)";
-        ctx.getSource().sendSystemMessage(Component.literal("[qisheng] 轮到: " + turn + yourTurn));
+        ctx.getSource().sendSystemMessage(Component.literal(CChessUtil.boardToAscii(t.session().getChessData())));
+        int role = t.session().getPlayerRole(player.getUUID());
+        Component turn = Component.translatable(t.session().getSdPlayer() == 0
+                ? "qisheng.chess.role.red" : "qisheng.chess.role.black");
+        Component yourTurn = (role == t.session().getSdPlayer())
+                ? Component.translatable("qisheng.chess.cmd.board.your_move")
+                : Component.translatable("qisheng.chess.cmd.board.waiting");
+        ctx.getSource().sendSystemMessage(Component.translatable(
+                "qisheng.chess.cmd.board.turn_line", turn, yourTurn));
         return 1;
     }
 
     private static int doStatus(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
-        BlockPos pos = SessionManager.get().getPlayerGame(player.getUUID());
-        if (pos == null) pos = SessionManager.get().getPlayerSpectating(player.getUUID());
-        if (pos == null) {
-            ctx.getSource().sendSystemMessage(Component.literal("[qisheng] You are not in a chess game or spectating."));
+        Target t = resolvePlaying(player, true);
+        if (t == null) {
+            ctx.getSource().sendSystemMessage(Component.translatable("qisheng.chess.cmd.not_in_game_idle"));
             return 1;
         }
-        GameSession session = SessionManager.get().get(pos);
-        if (session == null) {
-            ctx.getSource().sendSystemMessage(Component.literal("[qisheng] Session not found."));
-            return 1;
-        }
+        GameSession session = t.session();
         int role = session.getPlayerRole(player.getUUID());
-        String roleStr = role == 0 ? "红方(先手)" : role == 1 ? "黑方(后手)"
-                : (session.isSpectator(player.getUUID()) ? "旁观" : "不在对局");
-        String turnStr = session.getSdPlayer() == 0 ? "红方" : "黑方";
-        String selStr = session.getSelectPoint() < 0 ? "无" : String.valueOf(session.getSelectPoint());
-        String resultStr = session.getResult() == GameResult.ONGOING ? "进行中" : session.getResult().name();
-        ctx.getSource().sendSystemMessage(Component.literal(
-                "[qisheng] 棋盘 @ " + pos.toShortString()
-                        + " | 状态=" + session.getState()
-                        + " | 模式=" + session.getMode()
-                        + " | 你=" + roleStr
-                        + " | 轮到=" + turnStr
-                        + " | 选中=" + selStr
-                        + " | 结果=" + resultStr
-                        + " | 旁观=" + session.getSpectators().size()));
+        Component roleStr = role == 0
+                ? Component.translatable("qisheng.chess.role.red_first")
+                : role == 1
+                ? Component.translatable("qisheng.chess.role.black_second")
+                : (session.isSpectator(player.getUUID())
+                        ? Component.translatable("qisheng.chess.role.spectator")
+                        : Component.translatable("qisheng.chess.cmd.status.not_in_game"));
+        Component turnStr = Component.translatable(session.getSdPlayer() == 0
+                ? "qisheng.chess.role.red" : "qisheng.chess.role.black");
+        Component selStr = session.getSelectPoint() < 0
+                ? Component.translatable("qisheng.chess.cmd.status.none")
+                : Component.literal(String.valueOf(session.getSelectPoint()));
+        Component resultStr = session.getResult() == GameResult.ONGOING
+                ? Component.translatable("qisheng.chess.cmd.status.ongoing")
+                : Component.literal(session.getResult().name());
+        Component stateLabel = Component.literal(session.getState().name());
+        Component modeLabel = Component.literal(session.getMode().name());
+        Component boardKeyStr = Component.literal(BoardKey.of(t.level(), t.pos()).describe());
+        Component spectatorsStr = Component.literal(String.valueOf(session.getSpectators().size()));
+        ctx.getSource().sendSystemMessage(Component.translatable(
+                "qisheng.chess.cmd.status.line",
+                boardKeyStr, stateLabel, modeLabel, roleStr, turnStr, selStr, resultStr, spectatorsStr));
         return 1;
     }
 
+    /**
+     * Convert the user-facing square index (the one {@code /qisheng board} labels,
+     * 0 = bottom row, 9 = top row) into the engine's internal square code.
+     *
+     * <p>{@code boardToAscii} prints internal rank 3 first with the label
+     * {@code 9 - displayIdx}, i.e. the top row is labelled 9 and the bottom row 0.
+     * The previous version mapped the first digit straight onto the internal rank,
+     * so {@code /qisheng select 0} selected the row the board prints as 9 — the
+     * numbers in the command did not match the numbers on screen.
+     */
     private static int visualToInternal(int visualSq) {
-        int rank = visualSq / 9;
-        int file = visualSq % 9;
-        return com.qisheng.chess.engine.xqwlight.Position.COORD_XY(
-                file + com.qisheng.chess.engine.xqwlight.Position.FILE_LEFT,
-                rank + com.qisheng.chess.engine.xqwlight.Position.RANK_TOP);
+        int labelRow = visualSq / 9;            // 0 = bottom, 9 = top (as printed)
+        int file = visualSq % 9;                // 0 = a .. 8 = i
+        int displayIdx = 9 - labelRow;          // 0 = top .. 9 = bottom
+        return Position.COORD_XY(file + Position.FILE_LEFT, displayIdx + Position.RANK_TOP);
     }
 
     private static int doTakeover(CommandContext<CommandSourceStack> ctx, int role)
@@ -239,87 +303,117 @@ public class ModCommands {
         UUID me = player.getUUID();
         SessionManager sm = SessionManager.get();
 
-        BlockPos pos = sm.getPlayerSpectating(me);
-        if (pos == null) {
-            ctx.getSource().sendFailure(Component.literal(
-                    "[qisheng] Spectate the board first (right-click it), then use /qisheng takeover."));
+        BoardKey key = sm.getPlayerSpectating(me);
+        if (key == null) {
+            ctx.getSource().sendFailure(Component.translatable(
+                    "qisheng.chess.cmd.takeover.not_spectating"));
             return 0;
         }
-        GameSession session = sm.get(pos);
+        GameSession session = sm.get(key);
         if (session == null) {
-            ctx.getSource().sendFailure(Component.literal("[qisheng] Session gone."));
+            ctx.getSource().sendFailure(Component.translatable("qisheng.chess.cmd.session_gone"));
             return 0;
         }
-        String roleName = role == 0 ? "红方" : "黑方";
-        boolean ok = sm.takeOver(me, pos, role);
-        if (!ok) {
-            ctx.getSource().sendFailure(Component.literal(
-                    "[qisheng] Cannot take over as " + roleName
-                            + ". Either the slot is full, you are already a player, or the game is not in PLAYING state."));
+        ServerLevel level = SessionManager.resolve(player.getServer(), key, player.serverLevel());
+        if (level == null) return 0;
+        BlockPos pos = key.pos();
+
+        Component roleName = Component.translatable(role == 0
+                ? "qisheng.chess.role.red"
+                : "qisheng.chess.role.black");
+        if (!sm.takeOver(me, key, role)) {
+            ctx.getSource().sendFailure(Component.translatable(
+                    "qisheng.chess.cmd.takeover.failed", roleName));
             return 0;
         }
         GameBroadcaster.sendPopupTo(player,
-                Component.literal("你已接手" + roleName + "。"),
+                Component.translatable("qisheng.chess.cmd.takeover.you_took_over", roleName),
                 PopupS2CPacket.Severity.INFO, 4);
         UUID other = role == 0 ? session.getBlackPlayer() : session.getRedPlayer();
         if (other != null) {
-            ServerPlayer otherPlayer = (ServerPlayer) player.serverLevel().getPlayerByUUID(other);
+            ServerPlayer otherPlayer = GameBroadcaster.findPlayer(level, other);
             if (otherPlayer != null) {
                 GameBroadcaster.sendPopupTo(otherPlayer,
-                        Component.literal(player.getName().getString() + " 已接手" + roleName + "。"),
+                        Component.translatable("qisheng.chess.cmd.takeover.other_took_over",
+                                player.getName(), roleName),
                         PopupS2CPacket.Severity.INFO, 4);
             }
         }
-        GameBroadcaster.broadcastSync(player.serverLevel(), session, pos);
-        GameBroadcaster.broadcastRoster(player.serverLevel(), session, pos);
-        BoardMessages.sendTo(player, session);
+        GameBroadcaster.broadcastSync(level, session, pos);
+        GameBroadcaster.broadcastRoster(level, session, pos);
         return 1;
     }
 
     private static int doLeave(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
         SessionManager sm = SessionManager.get();
-        BlockPos pos = sm.getPlayerGame(player.getUUID());
+        BoardKey key = sm.getPlayerGame(player.getUUID());
 
         // Spectator path first.
-        if (pos == null) {
-            BlockPos specPos = sm.getPlayerSpectating(player.getUUID());
-            if (specPos != null) {
-                GameSession s = sm.get(specPos);
-                if (s != null) s.removeSpectator(player.getUUID());
+        if (key == null) {
+            BoardKey specKey = sm.getPlayerSpectating(player.getUUID());
+            if (specKey != null) {
+                GameSession s = sm.get(specKey);
                 sm.removePlayerSpectating(player.getUUID());
+                if (s != null) s.removeSpectator(player.getUUID());
                 GameBroadcaster.sendPopupTo(player,
-                        Component.literal("已停止旁观。"),
+                        Component.translatable("qisheng.chess.cmd.leave.spectator_stopped"),
                         PopupS2CPacket.Severity.INFO, 3);
-                if (s != null) GameBroadcaster.broadcastRoster(player.serverLevel(), s, specPos);
+                if (s != null) {
+                    ServerLevel lvl = SessionManager.resolve(player.getServer(), specKey, player.serverLevel());
+                    if (lvl != null) GameBroadcaster.broadcastRoster(lvl, s, specKey.pos());
+                }
                 return 1;
             }
-            ctx.getSource().sendSystemMessage(Component.literal("[qisheng] You are not in a chess game or spectating."));
+            ctx.getSource().sendSystemMessage(Component.translatable("qisheng.chess.cmd.not_in_game_idle"));
             return 1;
         }
 
-        GameSession session = sm.get(pos);
+        GameSession session = sm.get(key);
         if (session == null) return 1;
+        ServerLevel level = SessionManager.resolve(player.getServer(), key, player.serverLevel());
+        if (level == null) return 1;
+        BlockPos pos = key.pos();
+
+        // Leaving a live game forfeits it — otherwise the opponent is stuck
+        // staring at a board whose other seat is a phantom.
+        boolean wasPlaying = session.getState() == GameState.PLAYING;
+        UUID survivorId = null;
+        if (wasPlaying) {
+            boolean leaverIsRed = player.getUUID().equals(session.getRedPlayer());
+            survivorId = leaverIsRed ? session.getBlackPlayer() : session.getRedPlayer();
+            GameResult result = leaverIsRed ? GameResult.BLACK_WIN : GameResult.RED_WIN;
+            session.setResult(result);
+            session.setState(GameState.FINISHED);
+            if (survivorId != null) {
+                ServerPlayer survivor = GameBroadcaster.findPlayer(level, survivorId);
+                if (survivor != null) {
+                    GameBroadcaster.sendPopupTo(survivor,
+                            Component.translatable("qisheng.chess.cmd.leave.opponent_won",
+                                    player.getName()),
+                            PopupS2CPacket.Severity.INFO, 5);
+                }
+            }
+            GameBroadcaster.broadcastGameOver(level, session, pos, result);
+        }
 
         sm.evictPlayer(player.getUUID());
+        session.setRedPlayer(null);
+        session.setBlackPlayer(null);
+        session.setSdPlayer(0);
+        session.setSelectPoint(-1);
+        session.getChessData().fromFen(CChessUtil.INIT);
+        session.setState(GameState.WAITING);
+        session.setResult(GameResult.ONGOING);
+        if (survivorId != null) sm.evictPlayer(survivorId);
 
-        if (session.getRedPlayer() == null && session.getBlackPlayer() == null) {
-            session.getChessData().fromFen(CChessUtil.INIT);
-            session.setSdPlayer(0);
-            session.setState(GameState.WAITING);
-            session.setResult(GameResult.ONGOING);
-            session.setSelectPoint(-1);
-            GameBroadcaster.broadcastSync(player.serverLevel(), session, pos);
-            GameBroadcaster.broadcastRoster(player.serverLevel(), session, pos);
-            GameBroadcaster.sendPopupTo(player,
-                    Component.literal("你已离场 — 棋盘已清空。"),
-                    PopupS2CPacket.Severity.INFO, 3);
-        } else {
-            GameBroadcaster.broadcastRoster(player.serverLevel(), session, pos);
-            GameBroadcaster.sendPopupTo(player,
-                    Component.literal("你已离场 — 对方可继续或也离场。"),
-                    PopupS2CPacket.Severity.INFO, 3);
-        }
+        GameBroadcaster.broadcastSync(level, session, pos);
+        GameBroadcaster.broadcastRoster(level, session, pos);
+        GameBroadcaster.sendPopupTo(player,
+                Component.translatable(wasPlaying
+                        ? "qisheng.chess.cmd.leave.was_playing"
+                        : "qisheng.chess.cmd.leave.idle"),
+                PopupS2CPacket.Severity.INFO, 3);
         return 1;
     }
 }

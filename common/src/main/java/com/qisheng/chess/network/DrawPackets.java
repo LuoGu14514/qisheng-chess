@@ -2,6 +2,7 @@ package com.qisheng.chess.network;
 
 import com.qisheng.chess.client.CChessBoardScreen;
 import com.qisheng.chess.network.PopupS2CPacket;
+import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.GameBroadcaster;
 import com.qisheng.chess.pvp.GameResult;
 import com.qisheng.chess.pvp.GameSession;
@@ -58,19 +59,21 @@ public final class DrawPackets {
             ServerPlayer sender = (ServerPlayer) ctx.getPlayer();
             if (sender == null) return;
             SessionManager sm = SessionManager.get();
-            BlockPos pos = sm.getPlayerGame(sender.getUUID());
-            if (pos == null) return;
-            GameSession session = sm.get(pos);
+            BoardKey key = sm.getPlayerGame(sender.getUUID());
+            if (key == null) return;
+            GameSession session = sm.get(key);
             if (session == null) return;
-            ServerLevel level = sender.serverLevel();
-            boolean ok = sm.requestDraw(sender.getUUID(), pos);
+            // 棋盘可能在别的维度:广播一律用棋盘所在的世界,而不是发送者自己的世界。
+            ServerLevel boardLevel = SessionManager.resolve(sender.getServer(), key, sender.serverLevel());
+            BlockPos pos = key.pos();
+            boolean ok = sm.requestDraw(sender.getUUID(), key);
             if (!ok) {
                 GameBroadcaster.sendPopupTo(sender,
                         Component.literal("无法发起求和(对局未进行、你不是对局玩家、或已有未处理的申请)。"),
                         PopupS2CPacket.Severity.WARN, 4);
                 return;
             }
-            GameBroadcaster.sendDrawInvite(level, session, pos, sender.getUUID());
+            GameBroadcaster.sendDrawInvite(boardLevel, session, pos, sender.getUUID());
         }
     }
 
@@ -79,9 +82,14 @@ public final class DrawPackets {
 
         public static FriendlyByteBuf write(BlockPos pos, UUID from) {
             FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+            writeInto(buf, pos, from);
+            return buf;
+        }
+
+        /** Encode into a caller-owned buffer (broadcasts need one buffer per recipient). */
+        public static void writeInto(FriendlyByteBuf buf, BlockPos pos, UUID from) {
             buf.writeBlockPos(pos);
             buf.writeUUID(from);
-            return buf;
         }
 
         public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
@@ -111,21 +119,22 @@ public final class DrawPackets {
             if (responder == null) return;
             boolean accept = buf.readByte() != 0;
             SessionManager sm = SessionManager.get();
-            BlockPos pos = sm.getPlayerGame(responder.getUUID());
-            if (pos == null) return;
-            GameSession session = sm.get(pos);
+            BoardKey key = sm.getPlayerGame(responder.getUUID());
+            if (key == null) return;
+            GameSession session = sm.get(key);
             if (session == null) return;
-            ServerLevel level = responder.serverLevel();
-            SessionManager.DrawOutcome outcome = sm.respondDraw(responder.getUUID(), pos, accept);
+            ServerLevel boardLevel = SessionManager.resolve(responder.getServer(), key, responder.serverLevel());
+            BlockPos pos = key.pos();
+            SessionManager.DrawOutcome outcome = sm.respondDraw(responder.getUUID(), key, accept);
             switch (outcome) {
                 case ACCEPTED -> {
                     session.setResult(GameResult.DRAW);
                     session.setState(GameState.FINISHED);
-                    sm.cancelDraw(pos);
-                    GameBroadcaster.broadcastGameOver(level, session, pos, GameResult.DRAW);
-                    GameBroadcaster.broadcastDrawResult(level, session, pos, Result.ACCEPTED);
+                    sm.cancelDraw(key);
+                    GameBroadcaster.broadcastGameOver(boardLevel, session, pos, GameResult.DRAW);
+                    GameBroadcaster.broadcastDrawResult(boardLevel, session, pos, Result.ACCEPTED);
                 }
-                case REJECTED -> GameBroadcaster.broadcastDrawResult(level, session, pos, Result.REJECTED);
+                case REJECTED -> GameBroadcaster.broadcastDrawResult(boardLevel, session, pos, Result.REJECTED);
                 case CANCELLED -> GameBroadcaster.sendPopupTo(responder,
                         Component.literal("求和申请已撤销(对局状态变化)。"),
                         PopupS2CPacket.Severity.INFO, 3);
@@ -138,13 +147,19 @@ public final class DrawPackets {
 
         public static FriendlyByteBuf write(Result result) {
             FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
-            buf.writeByte(result.ordinal());
+            writeInto(buf, result);
             return buf;
+        }
+
+        /** Encode into a caller-owned buffer (broadcasts need one buffer per recipient). */
+        public static void writeInto(FriendlyByteBuf buf, Result result) {
+            buf.writeByte(result.ordinal());
         }
 
         public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
             int ord = buf.readByte();
-            Result res = Result.values()[ord];
+            Result res = (ord >= 0 && ord < Result.values().length)
+                    ? Result.values()[ord] : Result.CANCELLED;
             Minecraft mc = Minecraft.getInstance();
             mc.execute(() -> {
                 if (mc.screen instanceof CChessBoardScreen scr) {

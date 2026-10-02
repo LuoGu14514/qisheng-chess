@@ -1,6 +1,7 @@
 package com.qisheng.chess.network;
 
 import com.qisheng.chess.client.CChessBoardScreen;
+import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.GameBroadcaster;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.SessionManager;
@@ -45,9 +46,9 @@ public final class SwitchPackets {
             if (sender == null) return;
             UUID target = buf.readUUID();
             SessionManager sm = SessionManager.get();
-            BlockPos pos = sm.getPlayerGame(sender.getUUID());
-            if (pos == null) return;
-            GameSession session = sm.get(pos);
+            BoardKey key = sm.getPlayerGame(sender.getUUID());
+            if (key == null) return;
+            GameSession session = sm.get(key);
             if (session == null) return;
             if (session.getState() != com.qisheng.chess.pvp.GameState.PLAYING) {
                 GameBroadcaster.sendPopupTo(sender,
@@ -75,8 +76,9 @@ public final class SwitchPackets {
                 return;
             }
             session.setPendingSwitch(new Pending(sender.getUUID(), target));
-            ServerLevel level = sender.serverLevel();
-            ServerPlayer targetPlayer = (ServerPlayer) level.getPlayerByUUID(target);
+            // 对方可能站在别的维度,用跨维度查找(棋盘所在世界)。
+            ServerLevel boardLevel = SessionManager.resolve(sender.getServer(), key, sender.serverLevel());
+            ServerPlayer targetPlayer = GameBroadcaster.findPlayer(boardLevel, target);
             if (targetPlayer == null) {
                 GameBroadcaster.sendPopupTo(sender,
                         Component.literal("对方离线,无法邀请。"),
@@ -127,9 +129,9 @@ public final class SwitchPackets {
             if (responder == null) return;
             boolean accept = buf.readByte() != 0;
             SessionManager sm = SessionManager.get();
-            BlockPos pos = sm.getPlayerGame(responder.getUUID());
-            if (pos == null) return;
-            GameSession session = sm.get(pos);
+            BoardKey key = sm.getPlayerGame(responder.getUUID());
+            if (key == null) return;
+            GameSession session = sm.get(key);
             if (session == null) return;
             Pending pending = session.getPendingSwitch();
             if (pending == null || !pending.to.equals(responder.getUUID())) {
@@ -138,20 +140,23 @@ public final class SwitchPackets {
                         PopupS2CPacket.Severity.INFO, 2);
                 return;
             }
-            ServerLevel level = responder.serverLevel();
+            ServerLevel boardLevel = SessionManager.resolve(responder.getServer(), key, responder.serverLevel());
+            BlockPos pos = key.pos();
             session.setPendingSwitch(null);
             if (!accept) {
-                GameBroadcaster.sendSwitchResult(level, session, pos, Result.REJECTED);
+                GameBroadcaster.sendSwitchResult(boardLevel, session, pos, Result.REJECTED);
                 return;
             }
-            boolean ok = sm.swapRoles(pending.from, pending.to);
+            // Pending 不携带棋盘键(只是服务端内存里的玩家对)。上面已校验
+            // responder == pending.to,所以应答者自己的对局键就是这次切换的棋盘键。
+            boolean ok = sm.swapRoles(key, pending.from, pending.to);
             if (!ok) {
-                GameBroadcaster.sendSwitchResult(level, session, pos, Result.NO_LONGER_VALID);
+                GameBroadcaster.sendSwitchResult(boardLevel, session, pos, Result.NO_LONGER_VALID);
                 return;
             }
-            GameBroadcaster.broadcastRoster(level, session, pos);
-            GameBroadcaster.broadcastSync(level, session, pos);
-            GameBroadcaster.sendSwitchResult(level, session, pos, Result.ACCEPTED);
+            GameBroadcaster.broadcastRoster(boardLevel, session, pos);
+            GameBroadcaster.broadcastSync(boardLevel, session, pos);
+            GameBroadcaster.sendSwitchResult(boardLevel, session, pos, Result.ACCEPTED);
         }
     }
 
@@ -160,13 +165,22 @@ public final class SwitchPackets {
 
         public static FriendlyByteBuf write(Result result) {
             FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
-            buf.writeByte(result.ordinal());
+            writeInto(buf, result);
             return buf;
+        }
+
+        /** Encode into a caller-owned buffer (broadcasts need one buffer per recipient). */
+        public static void writeInto(FriendlyByteBuf buf, Result result) {
+            buf.writeByte(result.ordinal());
         }
 
         public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
             int ord = buf.readByte();
-            Result res = Result.values()[ord];
+            // Bounds-checked: a malformed/hostile ordinal used to throw
+            // ArrayIndexOutOfBoundsException on the client render thread.
+            // CANCELLED is the safe fallback — it dismisses any pending prompt.
+            Result res = (ord >= 0 && ord < Result.values().length)
+                    ? Result.values()[ord] : Result.CANCELLED;
             Minecraft mc = Minecraft.getInstance();
             mc.execute(() -> {
                 if (mc.screen instanceof CChessBoardScreen scr) {

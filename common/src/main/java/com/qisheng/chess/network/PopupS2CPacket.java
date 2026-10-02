@@ -44,7 +44,10 @@ public class PopupS2CPacket {
     }
 
     public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-        Severity sev = Severity.values()[buf.readByte()];
+        int sevOrd = buf.readByte();
+        // Bounds-checked: a bad ordinal used to crash the client with AIOOBE.
+        Severity sev = (sevOrd >= 0 && sevOrd < Severity.values().length)
+                ? Severity.values()[sevOrd] : Severity.INFO;
         // Read as Component (not readUtf) — server uses writeComponent which
         // encodes the style chain (color, bold, italic, clickEvent, …) as
         // NBT. A raw readUtf would pull out a partial JSON string and the

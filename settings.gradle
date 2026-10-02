@@ -1,14 +1,15 @@
 pluginManagement {
     repositories {
-        maven { url "https://maven.fabricmc.net/" }
-        maven { url "https://maven.architectury.dev/" }
-        maven { url "https://files.minecraftforge.net/maven/" }
+        maven { url = 'https://maven.fabricmc.net/' }
+        maven { url = 'https://maven.architectury.dev/' }
+        // Loom's own classpath pulls installertools / mcinjector / DiffPatch from here.
+        maven { url = 'https://maven.minecraftforge.net/' }
         gradlePluginPortal()
     }
 }
 
 rootProject.name = 'qisheng_chess'
 
+// Fabric-only build. The NeoForge module was removed in 0.1.2 -- see NOTICE.
 include 'common'
 include 'fabric'
-// include 'neoforge' (Fabric-only build)

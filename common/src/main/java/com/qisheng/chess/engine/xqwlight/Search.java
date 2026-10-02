@@ -40,6 +40,29 @@ public class Search {
     int[] historyTable = new int[4096];
     int[][] mvKiller = new int[LIMIT_DEPTH][2];
 
+    /**
+     * Absolute {@code System.currentTimeMillis()} deadline for the running search,
+     * or {@code 0} when no budget was given.
+     */
+    private long deadline = 0L;
+
+    /** Latched as soon as the deadline is exceeded; unwinds the recursion. */
+    private boolean stopped = false;
+
+    /**
+     * Nodes between clock reads. {@code System.currentTimeMillis()} costs about as
+     * much as a handful of nodes, so it must not be called per node. Must be a
+     * power of two — the check is a mask on {@link #allNodes}.
+     */
+    private static final int CHECK_NODES = 1024;
+
+    /**
+     * Value returned by an aborted subtree. It equals the existing "no best value
+     * yet" sentinel used by {@link #searchFull}/{@link #searchRoot}, so a parent
+     * naturally discards an aborted line instead of adopting a bogus score.
+     */
+    private static final int ABORTED = -MATE_VALUE;
+
     public Search(Position pos, int hashLevel) {
         this.pos = pos;
         hashMask = (1 << hashLevel) - 1;
@@ -47,6 +70,28 @@ public class Search {
         for (int i = 0; i <= hashMask; i++) {
             hashTable[i] = new HashItem();
         }
+    }
+
+    /**
+     * True when the time budget is used up.
+     *
+     * <p>Only reads the clock every {@link #CHECK_NODES} nodes. The first node of a
+     * search never trips it, so a search always gets at least one node in.
+     *
+     * <p>Aborting is safe for the position: every frame of {@code searchFull} /
+     * {@code searchQuiesc} that can observe {@code stopped} is at a point where its
+     * own {@code makeMove} has already been undone, so the board is never left in a
+     * half-made state.
+     */
+    private boolean outOfTime() {
+        if (stopped) return true;
+        if (deadline == 0L) return false;
+        if ((allNodes & (CHECK_NODES - 1)) != 0) return false;
+        if (System.currentTimeMillis() >= deadline) {
+            stopped = true;
+            return true;
+        }
+        return false;
     }
 
     private HashItem getHashItem() {
@@ -209,6 +254,7 @@ public class Search {
     private int searchQuiesc(int vlAlpha_, int vlBeta) {
         int vlAlpha = vlAlpha_;
         allNodes++;
+        if (outOfTime()) return ABORTED;
         int vl = pos.mateValue();
         if (vl >= vlBeta) {
             return vl;
@@ -263,6 +309,8 @@ public class Search {
                 vlAlpha = Math.max(vl, vlAlpha);
             }
         }
+        // Do not report "checkmate" for a position we simply ran out of time on.
+        if (stopped) return ABORTED;
         return vlBest == -MATE_VALUE ? pos.mateValue() : vlBest;
     }
 
@@ -281,6 +329,7 @@ public class Search {
             return searchQuiesc(vlAlpha, vlBeta);
         }
         allNodes++;
+        if (outOfTime()) return ABORTED;
         vl = pos.mateValue();
         if (vl >= vlBeta) {
             return vl;
@@ -338,6 +387,9 @@ public class Search {
                 }
             }
         }
+        // An aborted search must not publish a hash entry or killer/history move —
+        // those survive into the next iteration and would poison it.
+        if (stopped) return ABORTED;
         if (vlBest == -MATE_VALUE) {
             return pos.mateValue();
         }
@@ -367,6 +419,9 @@ public class Search {
                 }
             }
             pos.undoMakeMove();
+            if (stopped) {
+                break;
+            }
             if (vl > vlBest) {
                 vlBest = vl;
                 mvResult = mv;
@@ -426,26 +481,65 @@ public class Search {
         }
         mvResult = 0;
         allNodes = 0;
+        allMillis = 0;
         pos.distance = 0;
         long t = System.currentTimeMillis();
-        for (int i = 1; i <= depth; i++) {
-            int vl = searchRoot(i);
+        // The budget is enforced inside the search itself, not only between iterations:
+        // a single deep iteration used to be able to run for an unbounded time.
+        deadline = t + Math.max(1L, (long) millis);
+        stopped = false;
+        try {
+            for (int i = 1; i <= depth; i++) {
+                int vl = searchRoot(i);
+                allMillis = (int) (System.currentTimeMillis() - t);
+                if (stopped || allMillis > millis) {
+                    break;
+                }
+                if (vl > WIN_VALUE || vl < -WIN_VALUE) {
+                    break;
+                }
+                if (searchUnique(1 - WIN_VALUE, i)) {
+                    break;
+                }
+            }
+        } finally {
+            deadline = 0L;
+            stopped = false;
+        }
+        if (allMillis <= 0) {
             allMillis = (int) (System.currentTimeMillis() - t);
-            if (allMillis > millis) {
-                break;
-            }
-            if (vl > WIN_VALUE || vl < -WIN_VALUE) {
-                break;
-            }
-            if (searchUnique(1 - WIN_VALUE, i)) {
-                break;
-            }
+        }
+        if (mvResult <= 0) {
+            mvResult = fallbackMove();
         }
         return mvResult;
     }
 
+    /**
+     * Returns any legal move for the side to move, or {@code 0} when the side is
+     * checkmated or stalemated.
+     *
+     * <p>Guarantees that an aborted search still hands the caller a playable move.
+     * The position is left exactly as it was found.
+     */
+    private int fallbackMove() {
+        int[] mvs = new int[MAX_GEN_MOVES];
+        int genMoves = pos.generateAllMoves(mvs);
+        for (int i = 0; i < genMoves; i++) {
+            if (pos.makeMove(mvs[i])) {
+                pos.undoMakeMove();
+                return mvs[i];
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Nodes per second, or {@code 0} when the clock never advanced far enough to
+     * measure. Never divides by zero.
+     */
     public int getKNPS() {
-        return allNodes / allMillis;
+        return allMillis <= 0 ? 0 : allNodes / allMillis;
     }
 
     static class HashItem {

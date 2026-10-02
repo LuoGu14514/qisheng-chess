@@ -1,5 +1,6 @@
 package com.qisheng.chess.client;
 
+import com.qisheng.chess.engine.ChineseChessEngine;
 import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.network.ChatPackets;
 import com.qisheng.chess.network.ChessResignC2SPacket;
@@ -100,6 +101,46 @@ public class CChessBoardScreen extends Screen {
 
     private Roster roster;
 
+    /**
+     * Screen-owned chat log. The chat widget renders this very list, so the
+     * history survives {@link #init()} (window resize) instead of dying with
+     * the widget instance.
+     */
+    private final List<ChatBoxWidget.Message> chatLog = new ArrayList<>();
+    /** Half-typed chat line, saved before a resize rebuilds the widget. */
+    private String chatDraft = "";
+
+    /** Per-screen popup stacks — see PopupOverlay / ActionPopup. */
+    final PopupOverlay popups = new PopupOverlay();
+    final ActionPopup actionPopup = new ActionPopup();
+
+    // ---- 棋盘 / 合法落点缓存（P2-1）----------------------------------------
+    // 改前：render() 每帧调用 Position.fromFenString(fen)（一次完整 FEN 解析
+    // 加一个约 3.3 KB 的新 Position），drawLegalDots() 再对 90 个格子逐个调用
+    // pos.legalMove(...)（每次都会生成整盘走法、试走、撤销），60 FPS 下每秒
+    // 上千次走法生成、约 200 KB/s 垃圾。
+    // 改后：两者都只在 (fen, selectedSq) 真正变化时算一次，其余帧只查表；凡是
+    // 给 fen / selectedSq 赋值的地方都在赋值后调用 refreshBoardCaches()。
+    // 两个缓存的键同时做兜底校验：万一将来漏调刷新，也不会画出过期落点。
+    private String cachedFen;
+    private Position cachedPos;
+    private String destCacheFen;
+    private int destCacheSelect = Integer.MIN_VALUE;
+    private boolean[] destCache;
+    /**
+     * Legal destinations for the current selection as reported by the server.
+     * {@code null} when no bitmap has been received yet, when no piece is
+     * selected, or when the selection does not belong to the side to move.
+     * When non-null, {@link #legalDestinations()} prefers it over the local
+     * cached compute — the server is the single source of truth, the client
+     * no longer runs {@code Position#legalMove} 90 times per frame.
+     */
+    private boolean[] serverDests;
+    /** FEN the {@link #serverDests} bitmap was computed against, for staleness check. */
+    private String serverDestsFen;
+    /** Selection the {@link #serverDests} bitmap was computed for. */
+    private int serverDestsSelect = Integer.MIN_VALUE;
+
     private int cell = 48;
     private int boardX = 0;
     private int boardY = 0;
@@ -126,7 +167,13 @@ public class CChessBoardScreen extends Screen {
     public CChessBoardScreen(BlockPos boardPos, UUID selfId,
                              String fen, int sdPlayer, int stateOrd,
                              int selectPoint, int myRole) {
-        super(Component.literal("启升棋"));
+        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, null);
+    }
+
+    public CChessBoardScreen(BlockPos boardPos, UUID selfId,
+                             String fen, int sdPlayer, int stateOrd,
+                             int selectPoint, int myRole, boolean[] legalDests) {
+        super(Component.translatable("qisheng.chess.screen.title"));
         this.boardPos = boardPos;
         this.selfId = selfId;
         if (fen != null) this.fen = fen;
@@ -135,6 +182,10 @@ public class CChessBoardScreen extends Screen {
         this.selectedSq = selectPoint;
         this.myRole = myRole;
         this.viewerIsBlack = (myRole == 1);
+        // 打开棋盘界面（开局 / 重开）时 fen 与 selectedSq 在这里被赋值，
+        // 之后同样要作废缓存，让首次绘制按当前状态重建。
+        refreshBoardCaches();
+        applyServerDests(legalDests);
     }
 
     public BlockPos getBoardPos() { return boardPos; }
@@ -156,57 +207,87 @@ public class CChessBoardScreen extends Screen {
     }
 
     public void applySync(String fen, int sdPlayer, int stateOrd, int selectPoint) {
+        applySync(fen, sdPlayer, stateOrd, selectPoint, null);
+    }
+
+    public void applySync(String fen, int sdPlayer, int stateOrd, int selectPoint,
+                          boolean[] legalDests) {
         if (fen != null) this.fen = fen;
         this.sdPlayer = sdPlayer;
         this.stateOrd = stateOrd;
         this.selectedSq = selectPoint;
+        // 选子 / 落子 / 开局 / 重开全都由服务器同步到这里，这是运行期唯一改动
+        // fen 与 selectedSq 的入口：赋值后立刻作废棋盘与落点缓存，下一帧按新
+        // 状态重算一次（宁可多刷一次，也不能漏刷）。
+        refreshBoardCaches();
+        applyServerDests(legalDests);
         rebuildActionPanel();
+    }
+
+    /** Store a server-supplied legal-destinations bitmap, with a no-op key check. */
+    private void applyServerDests(boolean[] legalDests) {
+        this.serverDests = legalDests;
+        this.serverDestsFen = (legalDests == null) ? null : this.fen;
+        this.serverDestsSelect = (legalDests == null) ? Integer.MIN_VALUE : this.selectedSq;
     }
 
     public void onDrawInvite(UUID from) {
         String name = lookupName(from);
         Component text = (name == null || name.isEmpty())
-                ? Component.literal("对方申请求和")
-                : Component.literal(name + " 申请求和");
-        ActionPopup.show(text, PopupS2CPacket.Severity.WARN,
-                "接受", "拒绝",
+                ? Component.translatable("qisheng.chess.draw.invite.anonymous")
+                : Component.translatable("qisheng.chess.draw.invite.named",
+                        TextSanitizer.strip(name));
+        actionPopup.show(ActionPopup.Tag.DRAW_INVITE, text, PopupS2CPacket.Severity.WARN,
+                Component.translatable("qisheng.chess.popup.accept").getString(),
+                Component.translatable("qisheng.chess.popup.reject").getString(),
                 () -> sendDrawResponse(true),
                 () -> sendDrawResponse(false));
     }
 
     public void onDrawResult(DrawPackets.Result res) {
-        String msg = switch (res) {
-            case REQUESTED -> "求和申请已发出,等待对方回应…";
-            case ACCEPTED  -> "对方接受求和!";
-            case REJECTED  -> "对方拒绝求和。";
-            case CANCELLED -> "求和申请已撤销。";
+        Component msg = switch (res) {
+            case REQUESTED -> Component.translatable("qisheng.chess.draw.requested");
+            case ACCEPTED  -> Component.translatable("qisheng.chess.draw.accepted");
+            case REJECTED  -> Component.translatable("qisheng.chess.draw.rejected");
+            case CANCELLED -> Component.translatable("qisheng.chess.draw.cancelled");
         };
-        PopupOverlay.show(Component.literal(msg), PopupS2CPacket.Severity.INFO, 3);
+        // The invitation is settled (accepted / rejected / cancelled by the
+        // server): retire its buttons so they cannot respond to stale state.
+        actionPopup.dismiss(ActionPopup.Tag.DRAW_INVITE);
+        popups.push(msg, PopupS2CPacket.Severity.INFO, 3);
     }
 
     public void onSwitchInvite(UUID from) {
         String name = lookupName(from);
-        Component text = Component.literal((name == null || name.isEmpty() ? "对方" : name)
-                + " 想跟你换身份(红/黑互换)");
-        ActionPopup.show(text, PopupS2CPacket.Severity.WARN,
-                "接受", "拒绝",
+        String who = (name == null || name.isEmpty())
+                ? Component.translatable("qisheng.chess.player.opponent").getString()
+                : TextSanitizer.strip(name);
+        Component text = Component.translatable("qisheng.chess.switch.invite", who);
+        actionPopup.show(ActionPopup.Tag.SWITCH_INVITE, text, PopupS2CPacket.Severity.WARN,
+                Component.translatable("qisheng.chess.popup.accept").getString(),
+                Component.translatable("qisheng.chess.popup.reject").getString(),
                 () -> sendSwitchResponse(true),
                 () -> sendSwitchResponse(false));
     }
 
     public void onSwitchResult(SwitchPackets.Result res) {
-        String msg = switch (res) {
-            case ACCEPTED        -> "换身份成功!";
-            case REJECTED        -> "对方拒绝换身份。";
-            case CANCELLED       -> "换身份请求已撤销。";
-            case NO_LONGER_VALID -> "换身份失败(对方已离线)。";
+        Component msg = switch (res) {
+            case ACCEPTED        -> Component.translatable("qisheng.chess.switch.accepted");
+            case REJECTED        -> Component.translatable("qisheng.chess.switch.rejected");
+            case CANCELLED       -> Component.translatable("qisheng.chess.switch.cancelled");
+            case NO_LONGER_VALID -> Component.translatable("qisheng.chess.switch.failed_offline");
         };
-        PopupOverlay.show(Component.literal(msg), PopupS2CPacket.Severity.INFO, 3);
+        // See onDrawResult: the request is over, the buttons must go.
+        actionPopup.dismiss(ActionPopup.Tag.SWITCH_INVITE);
+        popups.push(msg, PopupS2CPacket.Severity.INFO, 3);
     }
 
     public void onChatMessage(UUID senderId, String text) {
-        if (chatBox == null) return;
-        chatBox.pushMessage(senderId, lookupName(senderId), text);
+        // Screen-owned log: the widget renders this list directly, so history
+        // survives a resize even when the widget itself is rebuilt.
+        ChatBoxWidget.append(chatLog,
+                new ChatBoxWidget.Message(senderId, lookupName(senderId), text));
+        if (chatBox != null) chatBox.onHistoryChanged();
     }
 
     private String lookupName(UUID id) {
@@ -226,19 +307,28 @@ public class CChessBoardScreen extends Screen {
         super.init();
         recomputeLayout();
 
+        // Keep the half-typed chat line: the widget instance created below is
+        // new, the draft lives on the Screen.
+        if (this.chatBox != null) this.chatDraft = this.chatBox.getInputText();
+
         // Build widgets with their final cached rects. Screen.resize()
         // already re-runs init() on window resize, so the widget instances
-        // get rebuilt with the new geometry automatically.
+        // get rebuilt with the new geometry automatically — everything they
+        // need to remember (roster, chat log, draft) is re-applied below.
         this.specList = new SpectatorListWidget(
                 specRect.x(), specRect.y(), specRect.w(), specRect.h());
         addRenderableWidget(this.specList);
 
+        UUID redId = roster == null || roster.red == null ? null : roster.red.id;
+        UUID blackId = roster == null || roster.black == null ? null : roster.black.id;
+        String redName = roster == null || roster.red == null ? null : roster.red.name;
+        String blackName = roster == null || roster.black == null ? null : roster.black.name;
         this.redBadge = new PlayerBadgeWidget(
                 redBadgeRect.x(), redBadgeRect.y(), redBadgeRect.w(), redBadgeRect.h(),
-                null, null, 0, myRole == 0);
+                redId, redName, 0, myRole == 0);
         this.blackBadge = new PlayerBadgeWidget(
                 blackBadgeRect.x(), blackBadgeRect.y(), blackBadgeRect.w(), blackBadgeRect.h(),
-                null, null, 1, myRole == 1);
+                blackId, blackName, 1, myRole == 1);
         addRenderableWidget(this.redBadge);
         addRenderableWidget(this.blackBadge);
 
@@ -248,8 +338,28 @@ public class CChessBoardScreen extends Screen {
         rebuildActionPanel();
 
         this.chatBox = new ChatBoxWidget(
-                chatRect.x(), chatRect.y(), chatRect.w(), chatRect.h());
+                chatRect.x(), chatRect.y(), chatRect.w(), chatRect.h(), chatLog);
+        this.chatBox.setInputText(this.chatDraft);
         addRenderableWidget(this.chatBox);
+
+        // Re-apply the last received state: without this a window resize reset
+        // both badges to "?", the spectator list to "棋局加载中…", the action
+        // buttons and the chat history until the next CHESS_PLAYER_INFO /
+        // CHESS_CHAT packet arrived.
+        if (this.roster != null) applyRoster(this.roster);
+    }
+
+    /**
+     * Screen teardown. Both popup stacks are per-screen state, but clearing
+     * here is the belt-and-braces guarantee that no sticky chip and no live
+     * invitation can outlive the GUI (they used to be {@code static} deques
+     * that nothing ever cleared).
+     */
+    @Override
+    public void removed() {
+        popups.clear();
+        actionPopup.clear();
+        super.removed();
     }
 
     @Override
@@ -321,26 +431,33 @@ public class CChessBoardScreen extends Screen {
         boolean blackEmpty = roster != null && roster.black == null;
         if (amPlayer && inGame) {
             acts.add(new ActionButtonsWidget.Action(
-                    "求和", ActionButtonsWidget.Kind.NEUTRAL, true, this::onClickDraw));
+                    Component.translatable("qisheng.chess.action.draw").getString(),
+                    ActionButtonsWidget.Kind.NEUTRAL, this::onClickDraw));
             acts.add(new ActionButtonsWidget.Action(
-                    "认输", ActionButtonsWidget.Kind.DANGER, true, this::onClickResign));
+                    Component.translatable("qisheng.chess.action.resign").getString(),
+                    ActionButtonsWidget.Kind.DANGER, this::onClickResign));
         }
         if (amSpec && inGame) {
             if (redEmpty) acts.add(new ActionButtonsWidget.Action(
-                    "切换到红方", ActionButtonsWidget.Kind.PRIMARY, true,
+                    Component.translatable("qisheng.chess.action.take_over.red").getString(),
+                    ActionButtonsWidget.Kind.PRIMARY,
                     () -> onClickTakeOver(0)));
             if (blackEmpty) acts.add(new ActionButtonsWidget.Action(
-                    "切换到黑方", ActionButtonsWidget.Kind.PRIMARY, true,
+                    Component.translatable("qisheng.chess.action.take_over.black").getString(),
+                    ActionButtonsWidget.Kind.PRIMARY,
                     () -> onClickTakeOver(1)));
             if (!redEmpty) acts.add(new ActionButtonsWidget.Action(
-                    "申请跟红方换", ActionButtonsWidget.Kind.NEUTRAL, true,
+                    Component.translatable("qisheng.chess.action.request_switch.red").getString(),
+                    ActionButtonsWidget.Kind.NEUTRAL,
                     () -> onClickRequestSwitch(0)));
             if (!blackEmpty) acts.add(new ActionButtonsWidget.Action(
-                    "申请跟黑方换", ActionButtonsWidget.Kind.NEUTRAL, true,
+                    Component.translatable("qisheng.chess.action.request_switch.black").getString(),
+                    ActionButtonsWidget.Kind.NEUTRAL,
                     () -> onClickRequestSwitch(1)));
         }
         acts.add(new ActionButtonsWidget.Action(
-                "评论/聊天", ActionButtonsWidget.Kind.NEUTRAL, true, this::onClickComment));
+                Component.translatable("qisheng.chess.action.chat").getString(),
+                ActionButtonsWidget.Kind.NEUTRAL, this::onClickComment));
         actionPanel.setActions(acts);
     }
 
@@ -350,9 +467,11 @@ public class CChessBoardScreen extends Screen {
     }
 
     private void onClickResign() {
-        ActionPopup.show(Component.literal("确定认输?"),
+        actionPopup.show(ActionPopup.Tag.CONFIRM,
+                Component.translatable("qisheng.chess.resign.confirm"),
                 PopupS2CPacket.Severity.ERROR,
-                "认输", "取消",
+                Component.translatable("qisheng.chess.action.resign").getString(),
+                Component.translatable("qisheng.chess.popup.cancel").getString(),
                 () -> {
                     FriendlyByteBuf buf = ChessResignC2SPacket.write();
                     NetworkManager.sendToServer(ModNetwork.CHESS_RESIGN, buf);
@@ -361,9 +480,10 @@ public class CChessBoardScreen extends Screen {
     }
 
     private void onClickTakeOver(int role) {
-        PopupOverlay.show(Component.literal(
-                "请右键棋盘方块(站位需要 ≤5 格)即可以 "
-                        + (role == 0 ? "红" : "黑") + " 方接手。"),
+        popups.push(Component.translatable("qisheng.chess.take_over.hint",
+                        Component.translatable(role == 0
+                                ? "qisheng.chess.side.red"
+                                : "qisheng.chess.side.black")),
                 PopupS2CPacket.Severity.INFO, 5);
     }
 
@@ -381,7 +501,7 @@ public class CChessBoardScreen extends Screen {
     private void onClickComment() {
         if (chatBox == null) return;
         chatBox.setFocused(true);
-        PopupOverlay.show(Component.literal("点聊天框输入 — 回车发送"),
+        popups.push(Component.translatable("qisheng.chess.chat.input_hint"),
                 PopupS2CPacket.Severity.INFO, 3);
     }
 
@@ -395,13 +515,85 @@ public class CChessBoardScreen extends Screen {
         NetworkManager.sendToServer(ModNetwork.CHESS_SWITCH_RESPONSE, buf);
     }
 
+    // ---------- board caches (P2-1) ----------
+
+    /**
+     * 作废棋盘与合法落点缓存，下一次绘制时按当前 fen / selectedSq 重建一次。
+     *
+     * <p>凡是给 {@link #fen} 或 {@link #selectedSq} 赋值的地方，赋值之后都必须
+     * 调用本方法：宁可多刷一次，也不能漏刷——漏刷会让界面画出过期的落点。
+     */
+    private void refreshBoardCaches() {
+        cachedFen = null;
+        cachedPos = null;
+        destCacheFen = null;
+        destCacheSelect = Integer.MIN_VALUE;
+        destCache = null;
+        serverDests = null;
+        serverDestsFen = null;
+        serverDestsSelect = Integer.MIN_VALUE;
+    }
+
+    /**
+     * 当前 FEN 对应的棋盘，只在 FEN 字符串变化时重新解析一次（改前 render()
+     * 每帧解析，60 FPS 下每秒新建 60 个约 3.3 KB 的 Position）。
+     */
+    private Position position() {
+        String f = fen == null ? "" : fen;
+        if (cachedPos == null || !f.equals(cachedFen)) {
+            cachedFen = f;
+            cachedPos = Position.fromFenString(f);
+        }
+        return cachedPos;
+    }
+
+    /**
+     * 当前选中棋子的全部合法落点，下标即棋盘内部坐标 0..255；未选中
+     * （selectedSq 不在盘上）时返回全 false，且不会做 90 格的空计算。
+     *
+     * <p>首选服务器下发的位图（v0.2 起）：服务端随 {@code CHESS_SYNC} / {@code
+     * CHESS_OPEN_SCREEN} 广播合法的 256 格，客户端不再每帧 90 次 {@code
+     * pos.legalMove}。没有下发时（等待同步、本地缓存单人、finished 等）回退到
+     * 本地计算；本地分支同样按 {@code (fen, selectedSq)} 缓存，避免重算。
+     */
+    private boolean[] legalDestinations() {
+        if (serverDests != null
+                && serverDestsSelect == selectedSq
+                && (serverDestsFen == null || serverDestsFen.equals(fen))) {
+            return serverDests;
+        }
+        String f = fen == null ? "" : fen;
+        if (destCache != null && destCacheSelect == selectedSq && f.equals(destCacheFen)) {
+            return destCache;
+        }
+        boolean[] dests = new boolean[256];
+        Position pos = position();
+        if (pos != null && ChineseChessEngine.isSquare(selectedSq)
+                && pos.squares[selectedSq] != 0) {
+            for (int file = 0; file < COLS; file++) {
+                for (int rank = 0; rank < ROWS; rank++) {
+                    int dst = Position.COORD_XY(file + Position.FILE_LEFT,
+                                                rank + Position.RANK_TOP);
+                    if (dst == selectedSq) continue;
+                    if (ChineseChessEngine.canMove(pos, selectedSq, dst)) {
+                        dests[dst] = true;
+                    }
+                }
+            }
+        }
+        destCacheFen = f;
+        destCacheSelect = selectedSq;
+        destCache = dests;
+        return dests;
+    }
+
     @Override
     public void render(GuiGraphics gfx, int mouseX, int mouseY, float partialTick) {
-        PopupOverlay.tick();
-        ActionPopup.tick();
+        popups.tick();
+        actionPopup.tick();
         gfx.fill(0, 0, this.width, this.height, COL_BG_DIM);
 
-        Position pos = Position.fromFenString(fen);
+        Position pos = position();
 
         drawFrame(gfx);
         drawGrid(gfx);
@@ -409,7 +601,9 @@ public class CChessBoardScreen extends Screen {
         drawPalace(gfx);
         if (pos != null) {
             drawPieces(gfx, pos);
-            if (selectedSq >= 0 && pos.squares[selectedSq] != 0) {
+            // 是否在盘上统一用门面判断：selectedSq 来自网络包，越界时
+            // pos.squares[selectedSq] 会直接抛数组越界。
+            if (ChineseChessEngine.isSquare(selectedSq) && pos.squares[selectedSq] != 0) {
                 drawSelection(gfx, selectedSq);
                 drawLegalDots(gfx, pos, selectedSq);
             }
@@ -420,16 +614,24 @@ public class CChessBoardScreen extends Screen {
 
         super.render(gfx, mouseX, mouseY, partialTick);
 
-        PopupOverlay.render(gfx, this.width);
-        ActionPopup.render(gfx, this.width);
+        // While a dialog with buttons is up, push the plain chips below it:
+        // the two centre-screen stacks used to overlap, so clicking a chip
+        // could hit an invitation button instead.
+        int actionBottom = actionPopup.renderedBottom();
+        int popupTop = actionBottom > 0 ? actionBottom + 4 : PopupOverlay.DEFAULT_TOP;
+        popups.render(gfx, this.width, popupTop);
+        actionPopup.render(gfx, this.width);
     }
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (chatBox != null && chatBox.isInputFocused()) {
             if (keyCode == 257) {
-                String t = chatBox.consumeInput();
-                if (t != null && !t.isEmpty()) {
+                // consumeInput() already clamps; clamp once more so no path can
+                // hand an over-long string to FriendlyByteBuf.writeUtf (that
+                // threw EncoderException and killed the client).
+                String t = ChatBoxWidget.clampToWire(chatBox.consumeInput());
+                if (!t.isEmpty()) {
                     FriendlyByteBuf buf = ChatPackets.Send.write(t);
                     NetworkManager.sendToServer(ModNetwork.CHESS_CHAT, buf);
                 }
@@ -487,8 +689,8 @@ public class CChessBoardScreen extends Screen {
         int ry1 = squareY(5) - 2;
         int riverBg = 0xFFD9B989;
         gfx.fill(boardX, ry0, boardX + boardW, ry1, riverBg);
-        String left = "楚 河";
-        String right = "汉 界";
+        String left = Component.translatable("qisheng.chess.board.river.left").getString();
+        String right = Component.translatable("qisheng.chess.board.river.right").getString();
         int cy = (squareY(4) + squareY(5)) / 2 - this.font.lineHeight / 2;
         int leftX = (boardX + squareX(COLS / 2)) / 2 - this.font.width(left) / 2;
         int rightX = (squareX(COLS / 2) + boardX + boardW) / 2 - this.font.width(right) / 2;
@@ -530,6 +732,45 @@ public class CChessBoardScreen extends Screen {
         }
     }
 
+    /**
+     * 棋子字面量,按 (阵营, 棋子种类) 下标 0..6 排列,顺序与 {@code drawPiece} 里
+     * 的 {@code base} 一致(0=将/帅 … 6=兵/卒)。
+     *
+     * <p>改造前 {@code drawPiece} 每帧对每个棋子调一次
+     * {@code Component.translatable(...).getString()} —— 满盘 32 子 × 60 FPS 就是
+     * 每秒近两千次翻译查找加字符串分配。现在整个屏幕只解析一次并缓存在实例上,
+     * 关掉再打开棋盘(新实例)即可拿到新语言的值。
+     */
+    private static final String[] PIECE_KEYS_RED = {
+            "qisheng.chess.piece.red_king",     "qisheng.chess.piece.red_advisor",
+            "qisheng.chess.piece.red_elephant", "qisheng.chess.piece.horse",
+            "qisheng.chess.piece.chariot",      "qisheng.chess.piece.cannon",
+            "qisheng.chess.piece.red_soldier",
+    };
+    private static final String[] PIECE_KEYS_BLACK = {
+            "qisheng.chess.piece.black_king",     "qisheng.chess.piece.black_advisor",
+            "qisheng.chess.piece.black_elephant", "qisheng.chess.piece.horse",
+            "qisheng.chess.piece.chariot",        "qisheng.chess.piece.cannon",
+            "qisheng.chess.piece.black_soldier",
+    };
+
+    /** 14 格:0..6 = 红,7..13 = 黑。延迟到第一次真正画棋子时再解析。 */
+    private String[] pieceLabels;
+
+    private String pieceLabel(int base, boolean isRed) {
+        if (base < 0 || base >= 7) return "?";
+        if (pieceLabels == null) {
+            String[] own   = isRed ? PIECE_KEYS_RED : PIECE_KEYS_BLACK;
+            String[] other = isRed ? PIECE_KEYS_BLACK : PIECE_KEYS_RED;
+            pieceLabels = new String[14];
+            for (int i = 0; i < 7; i++) {
+                pieceLabels[i]     = Component.translatable(own[i]).getString();
+                pieceLabels[i + 7] = Component.translatable(other[i]).getString();
+            }
+        }
+        return pieceLabels[isRed ? base : base + 7];
+    }
+
     private void drawPiece(GuiGraphics gfx, int cx, int cy, int r, byte pc) {
         boolean isRed = (pc & 8) == 8;
         boolean isBlack = (pc & 16) == 16;
@@ -543,16 +784,7 @@ public class CChessBoardScreen extends Screen {
         int inner = Math.max(2, r - 4);
         drawRectOutline(gfx, cx - inner, cy - inner, 2 * inner, 2 * inner, COL_INNER_RING, 1);
 
-        String letter = switch (base) {
-            case 0 -> isRed ? "帅" : "将";
-            case 1 -> isRed ? "仕" : "士";
-            case 2 -> isRed ? "相" : "象";
-            case 3 -> "马";
-            case 4 -> "车";
-            case 5 -> "炮";
-            case 6 -> isRed ? "兵" : "卒";
-            default -> "?";
-        };
+        String letter = pieceLabel(base, isRed);
         int textColor = isRed ? COL_RED_TEXT : COL_BLACK_TEXT;
         int tw = this.font.width(letter);
         gfx.drawString(this.font, letter, cx - tw / 2, cy - this.font.lineHeight / 2, textColor);
@@ -569,14 +801,15 @@ public class CChessBoardScreen extends Screen {
     }
 
     private void drawLegalDots(GuiGraphics gfx, Position pos, int selectedSq) {
+        // 改前每帧对 90 个格子各调用一次 pos.legalMove(...)；现在只查表，表由
+        // legalDestinations() 在 (fen, selectedSq) 变化时重算一次。
+        boolean[] dests = legalDestinations();
         int dotR = Math.max(3, cell / 7);
         for (int file = 0; file < COLS; file++) {
             for (int rank = 0; rank < ROWS; rank++) {
                 int dst = Position.COORD_XY(file + Position.FILE_LEFT,
                                             rank + Position.RANK_TOP);
-                if (dst == selectedSq) continue;
-                int mv = Position.MOVE(selectedSq, dst);
-                if (!pos.legalMove(mv)) continue;
+                if (!dests[dst]) continue;
                 byte dstPc = pos.squares[dst];
                 int cx = viewCX(file), cy = viewCY(rank);
                 if (dstPc == 0) {
@@ -591,18 +824,21 @@ public class CChessBoardScreen extends Screen {
 
     private void drawTitle(GuiGraphics gfx) {
         String roleStr = switch (myRole) {
-            case 0 -> "红方(先手)";
-            case 1 -> "黑方(后手)";
-            default -> "旁观";
+            case 0 -> Component.translatable("qisheng.chess.role.red_first").getString();
+            case 1 -> Component.translatable("qisheng.chess.role.black_second").getString();
+            default -> Component.translatable("qisheng.chess.role.spectator").getString();
         };
-        String turnStr = sdPlayer == 0 ? "红方回合" : "黑方回合";
+        String turnStr = sdPlayer == 0
+                ? Component.translatable("qisheng.chess.turn.red").getString()
+                : Component.translatable("qisheng.chess.turn.black").getString();
         String stateStr = switch (stateOrd) {
-            case 0 -> "等待对手";
-            case 1 -> "对局中";
-            case 2 -> "已结束";
-            default -> "未知";
+            case 0 -> Component.translatable("qisheng.chess.state.waiting").getString();
+            case 1 -> Component.translatable("qisheng.chess.state.playing").getString();
+            case 2 -> Component.translatable("qisheng.chess.state.finished").getString();
+            default -> Component.translatable("qisheng.chess.state.unknown").getString();
         };
-        String title = "启升棋  ·  " + roleStr + " ·  " + turnStr + " ·  " + stateStr;
+        String title = Component.translatable("qisheng.chess.screen.title_bar",
+                roleStr, turnStr, stateStr).getString();
         int tw = this.font.width(title);
         gfx.drawString(this.font, title, (this.width - tw) / 2, PADDING, COL_TEXT_PRIMARY);
     }
@@ -612,17 +848,19 @@ public class CChessBoardScreen extends Screen {
         String msg;
         int color;
         if (stateOrd == 2) {
-            msg = "对局已结束  ·  按 ESC 关闭";
+            msg = Component.translatable("qisheng.chess.status.finished").getString();
             color = COL_TEXT_MUTED;
         } else if (myRole < 0) {
-            msg = "旁观模式 — 只读";
+            msg = Component.translatable("qisheng.chess.status.spectator").getString();
             color = COL_TEXT_MUTED;
         } else if (myRole != sdPlayer) {
-            String waiting = sdPlayer == 0 ? "红方" : "黑方";
-            msg = "等待 " + waiting + " 落子…";
+            String waiting = sdPlayer == 0
+                    ? Component.translatable("qisheng.chess.role.red").getString()
+                    : Component.translatable("qisheng.chess.role.black").getString();
+            msg = Component.translatable("qisheng.chess.status.waiting_move", waiting).getString();
             color = COL_TEXT_MUTED;
         } else {
-            msg = "点己方棋子查看走位  ·  再点取消  ·  点蓝点 / 红环 = 走子";
+            msg = Component.translatable("qisheng.chess.status.your_turn").getString();
             color = COL_TEXT_PRIMARY;
         }
         int mw = this.font.width(msg);
@@ -631,7 +869,8 @@ public class CChessBoardScreen extends Screen {
 
     private void drawHint(GuiGraphics gfx) {
         int y = boardY + boardH + 24 + STATUS_H;
-        String h = "@ " + boardPos.toShortString() + "  ·  按 ESC 关闭";
+        String h = Component.translatable("qisheng.chess.hint.location",
+                boardPos.toShortString()).getString();
         int hw = this.font.width(h);
         gfx.drawString(this.font, h, (this.width - hw) / 2, y, COL_TEXT_DIM);
     }
@@ -655,8 +894,8 @@ public class CChessBoardScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (ActionPopup.mouseClicked(mouseX, mouseY, button)) return true;
-        if (PopupOverlay.mouseClicked(mouseX, mouseY, button)) return true;
+        if (actionPopup.mouseClicked(mouseX, mouseY, button)) return true;
+        if (popups.mouseClicked(mouseX, mouseY, button)) return true;
         if (button != 0) return super.mouseClicked(mouseX, mouseY, button);
 
         int dx = (int) Math.round(mouseX) - boardX;
@@ -665,6 +904,11 @@ public class CChessBoardScreen extends Screen {
             int viewFile = Math.round(dx / (float) cell);
             int viewRank = Math.round(dy / (float) cell);
             if (viewFile >= 0 && viewFile < COLS && viewRank >= 0 && viewRank < ROWS) {
+                // Playing a move releases the chat input: this branch returns
+                // early, so the click never reaches ChatBoxWidget.mouseClicked
+                // and the caret used to stay in the chat box while the player
+                // thought they were back on the board.
+                if (chatBox != null) chatBox.setFocused(false);
                 int fenFile = fenFileFromView(viewFile);
                 int fenRank = fenRankFromView(viewRank);
                 int sq = Position.COORD_XY(fenFile + Position.FILE_LEFT,
@@ -688,8 +932,8 @@ public class CChessBoardScreen extends Screen {
         if (stateOrd == 2) return;
         if (myRole < 0 || myRole != sdPlayer) return;
 
-        Position pos = Position.fromFenString(fen);
-        byte pc = (pos != null) ? pos.squares[sq] : 0;
+        Position pos = position();
+        byte pc = (pos != null && ChineseChessEngine.isSquare(sq)) ? pos.squares[sq] : 0;
 
         boolean isMyPiece = pc != 0
                 && ((myRole == 0 && (pc & 8) == 8)
@@ -704,8 +948,10 @@ public class CChessBoardScreen extends Screen {
             return;
         }
         if (selectedSq >= 0 && pos != null) {
-            int mv = Position.MOVE(selectedSq, sq);
-            if (pos.legalMove(mv)) {
+            // 与落点圆点查的是同一份缓存（同样经 ChineseChessEngine.canMove
+            // 计算），所以“显示为可走”和“点击被接受”永远不会互相矛盾。
+            boolean[] dests = legalDestinations();
+            if (ChineseChessEngine.isSquare(sq) && dests[sq]) {
                 sendInteract(ACTION_MOVE, selectedSq, sq);
                 return;
             }

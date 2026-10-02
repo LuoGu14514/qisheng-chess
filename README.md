@@ -144,10 +144,20 @@ qisheng-chess/
 
 ## 已知限制
 
-- **棋盘不可旋转**:方块没有 `facing` 属性,玩家无法切换红/黑视角。
 - **对局快照有丢失窗口**:棋盘状态在每次状态变化时标脏,随区块存档落盘;
   若在区块被保存前进程被杀,最近若干步可能丢失。
 - **PVC 的电脑执黑,不可换**:`BoardMode.PVC` 下人类永远执红;`/qisheng takeover`
   与 `swapRoles` 都会拒绝(PVC 棋盘就是单人 vs 引擎)。
 - **界面只做了 `zh_cn` 与 `en_us` 两种语言**。
 - **GUI 仍缺走子动画、音效、最近一步高亮**。
+
+## 放置与朝向
+
+`qisheng_chess:cchess` 接受 `facing` 状态属性,可设为 `north` / `south` /
+`east` / `west`(默认 `north`)。`south` 会让 GUI 渲染时把棋盘整体翻转 180°,
+适合把棋盘靠着北墙放、让南边走过来的玩家红方仍在下方;其余朝向只影响方块本身
+的 3-D 朝向,GUI 不变。可用 vanilla 命令测试:
+
+```
+/setblock ~ ~ ~ qisheng_chess:cchess[facing=south]
+```

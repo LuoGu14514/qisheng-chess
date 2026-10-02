@@ -11,16 +11,24 @@ import com.qisheng.chess.pvp.SessionManager;
 import com.qisheng.chess.tileentity.CChessTileEntity;
 import com.qisheng.chess.util.CChessUtil;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import org.jetbrains.annotations.Nullable;
 
@@ -55,8 +63,45 @@ import java.util.UUID;
 @SuppressWarnings("deprecation")
 public class CChessBoardBlock extends BaseEntityBlock {
 
+    /**
+     * Which horizontal direction the board's "front" faces. Determines the
+     * default piece orientation: when {@link Direction#SOUTH} the GUI renders
+     * flipped 180° (red at the top, black at the bottom) so a board mounted
+     * against a north wall looks correct to viewers standing on its south side.
+     * All four values are valid placements / rotations; EAST and WEST flip
+     * back to default for the GUI (red at the bottom) and only rotate the 3-D
+     * block model.
+     */
+    public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
+
     public CChessBoardBlock(Properties properties) {
         super(properties);
+        this.registerDefaultState(this.defaultBlockState().setValue(FACING, Direction.NORTH));
+    }
+
+    @Override
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+        builder.add(FACING);
+    }
+
+    @Override
+    @Nullable
+    public BlockState getStateForPlacement(BlockPlaceContext ctx) {
+        // Place facing the placer so the "front" of the board is the side they
+        // walked up to. Falling back to NORTH for non-player placements
+        // (commands, structure blocks, …).
+        Direction face = ctx.getHorizontalDirection().getOpposite();
+        return this.defaultBlockState().setValue(FACING, face);
+    }
+
+    @Override
+    public BlockState rotate(BlockState state, Rotation rotation) {
+        return state.setValue(FACING, rotation.rotate(state.getValue(FACING)));
+    }
+
+    @Override
+    public BlockState mirror(BlockState state, Mirror mirror) {
+        return state.setValue(FACING, mirror.mirror(state.getValue(FACING)));
     }
 
     @Nullable

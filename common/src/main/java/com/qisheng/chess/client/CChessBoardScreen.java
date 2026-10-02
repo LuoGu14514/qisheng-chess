@@ -93,6 +93,15 @@ public class CChessBoardScreen extends Screen {
     private final UUID selfId;
     private final int myRole;
     private final boolean viewerIsBlack;
+    /**
+     * XOR of {@link #viewerIsBlack} (role-based: red player sees red at the
+     * bottom, black player the reverse) and the board-block's facing flip
+     * (a south-facing board is mounted with its back to a north wall and is
+     * always shown rotated 180°). Used by the {@code viewFile/viewRank/...}
+     * helpers; if you flip this without going through {@link #setBoardFlipped}
+     * the cached {@code boardFlipped} will be wrong.
+     */
+    private boolean boardFlipped;
 
     private String fen = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR";
     private int sdPlayer = 0;
@@ -167,12 +176,19 @@ public class CChessBoardScreen extends Screen {
     public CChessBoardScreen(BlockPos boardPos, UUID selfId,
                              String fen, int sdPlayer, int stateOrd,
                              int selectPoint, int myRole) {
-        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, null);
+        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, null, false);
     }
 
     public CChessBoardScreen(BlockPos boardPos, UUID selfId,
                              String fen, int sdPlayer, int stateOrd,
                              int selectPoint, int myRole, boolean[] legalDests) {
+        this(boardPos, selfId, fen, sdPlayer, stateOrd, selectPoint, myRole, legalDests, false);
+    }
+
+    public CChessBoardScreen(BlockPos boardPos, UUID selfId,
+                             String fen, int sdPlayer, int stateOrd,
+                             int selectPoint, int myRole, boolean[] legalDests,
+                             boolean flipped) {
         super(Component.translatable("qisheng.chess.screen.title"));
         this.boardPos = boardPos;
         this.selfId = selfId;
@@ -182,6 +198,7 @@ public class CChessBoardScreen extends Screen {
         this.selectedSq = selectPoint;
         this.myRole = myRole;
         this.viewerIsBlack = (myRole == 1);
+        this.boardFlipped = this.viewerIsBlack ^ flipped;
         // 打开棋盘界面（开局 / 重开）时 fen 与 selectedSq 在这里被赋值，
         // 之后同样要作废缓存，让首次绘制按当前状态重建。
         refreshBoardCaches();
@@ -885,12 +902,12 @@ public class CChessBoardScreen extends Screen {
     private int squareX(int file) { return boardX + file * cell; }
     private int squareY(int rank) { return boardY + rank * cell; }
 
-    private int viewFile(int fenFile) { return viewerIsBlack ? (COLS - 1 - fenFile) : fenFile; }
-    private int viewRank(int fenRank) { return viewerIsBlack ? (ROWS - 1 - fenRank) : fenRank; }
+    private int viewFile(int fenFile) { return boardFlipped ? (COLS - 1 - fenFile) : fenFile; }
+    private int viewRank(int fenRank) { return boardFlipped ? (ROWS - 1 - fenRank) : fenRank; }
     private int viewCX(int fenFile) { return squareX(viewFile(fenFile)); }
     private int viewCY(int fenRank) { return squareY(viewRank(fenRank)); }
-    private int fenFileFromView(int viewFile) { return viewerIsBlack ? (COLS - 1 - viewFile) : viewFile; }
-    private int fenRankFromView(int viewRank) { return viewerIsBlack ? (ROWS - 1 - viewRank) : viewRank; }
+    private int fenFileFromView(int viewFile) { return boardFlipped ? (COLS - 1 - viewFile) : viewFile; }
+    private int fenRankFromView(int viewRank) { return boardFlipped ? (ROWS - 1 - viewRank) : viewRank; }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {

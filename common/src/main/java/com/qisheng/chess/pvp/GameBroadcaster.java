@@ -1,5 +1,6 @@
 package com.qisheng.chess.pvp;
 
+import com.qisheng.chess.block.CChessBoardBlock;
 import com.qisheng.chess.engine.ChineseChessEngine;
 import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.network.DrawPackets;
@@ -13,6 +14,7 @@ import com.qisheng.chess.tileentity.CChessTileEntity;
 import dev.architectury.networking.NetworkManager;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -143,6 +145,13 @@ public final class GameBroadcaster {
         int role = session.getPlayerRole(player.getUUID());
         UUID self = player.getUUID();
         boolean[] legalDests = computeLegalDestsForSelection(session);
+        // The board block's FACING (a horizontal Direction in BlockState) tells
+        // the GUI whether to render flipped: SOUTH = the block's "front" faces
+        // the placer's normal standing side, so the client flips the GUI 180°
+        // on top of any role-based viewerIsBlack to keep red on the bottom from
+        // the spectator's side.
+        boolean flipped = player.level().getBlockState(pos)
+                .getValue(CChessBoardBlock.FACING) == Direction.SOUTH;
         send(player, ModNetwork.CHESS_OPEN_SCREEN, buf -> {
             buf.writeBlockPos(pos);
             buf.writeUUID(self);
@@ -155,6 +164,7 @@ public final class GameBroadcaster {
             if (legalDests != null) {
                 LegalDestsBitmap.write(buf, legalDests);
             }
+            buf.writeBoolean(flipped);
         });
     }
 

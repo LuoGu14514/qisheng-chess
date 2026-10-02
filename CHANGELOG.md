@@ -5,11 +5,22 @@
 
 ---
 
-## [Unreleased] — v0.2 体验版 i18n 收尾
+## [Unreleased] — v0.2 体验版收尾
 
-目标：把所有 server 端硬编码中文一并搬进 lang 文件，让 `en_us` 也能完整跑。
+目标：把 v0.2 路线上还没落地的最后一项「棋盘可旋转」补上，并完成 i18n 收尾。
 
 ### 变更
+
+#### 棋盘可旋转
+
+- `block/CChessBoardBlock` 新增 `DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING`，默认 `NORTH`。覆盖 `getStateForPlacement` / `rotate` / `mirror` / `createBlockStateDefinition`，方块即可被标准方块状态命令（`/setblock ... [facing=south]`）或结构方块翻转。
+- `pvp/GameBroadcaster.sendOpenScreen` 在写入合法落点位图后追加 1 字节 `flipped`：`flipped = blockState.getValue(FACING) == SOUTH`。
+- `network/ChessOpenScreenS2CPacket` 多读 1 字节 `flipped`，构造 `CChessBoardScreen` 时传入。
+- `client/CChessBoardScreen` 新字段 `boardFlipped` = `viewerIsBlack XOR flipped`，`viewFile/viewRank/fenFileFromView/fenRankFromView` 都改读它。这样：
+  - 红方玩家（`viewerIsBlack=false`）站在默认朝北的棋盘前 → `boardFlipped=false`，红方在下方。
+  - 黑方玩家（`viewerIsBlack=true`）站在默认朝北的棋盘前 → `boardFlipped=true`，黑方在下方。
+  - 任何玩家站在朝南的棋盘前 → `flipped=true`，整体再翻 180°（红方从下方挪到上方），适合把棋盘靠北墙放、南边走来的玩家仍看红方在下面。
+- 朝向 `EAST` / `WEST` 当前不影响 GUI（只影响 3-D 方块模型朝向）；如果以后想让它们也参与翻转，把 `Direction.SOUTH` 比较换成 `Direction.from2DDataValue(...) != facing` 的归一即可。
 
 #### 服务端 i18n 完整化
 
@@ -21,7 +32,6 @@
 
 #### 已知限制 v0.2 仍未决
 
-- 棋盘不可旋转。
 - 棋盘 GUI 没有走子动画、音效、最近一步高亮。
 - 服务端没有实机验证（容器无 LWJGL Display + 无 EULA TTY）。
 

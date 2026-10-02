@@ -241,6 +241,7 @@ org.gradle.java.installations.auto-download=false
 - 12 i18n 客户端 — 全部走 `translatable`,`en_us.json` 71 键补齐,孤儿 `piece_*` 经审计仅 11 个全部被引用 → 不存在孤儿。
 - 13 渲染缓存 — `cachedFen/cachedPos/destCache` 字段 + `refreshBoardCaches()`。
 - 14 服务端下发合法落点 — `LegalDestsBitmap` (32 字节位图) 随 `broadcastSync` + `sendOpenScreen` 下发,客户端命中表优先。
+- 15 棋盘可旋转 — `CChessBoardBlock.FACING` (HORIZONTAL_FACING, 4 朝向) + `getStateForPlacement/rotate/mirror` 覆盖,`sendOpenScreen` 追加 `flipped` 字节,`boardFlipped = viewerIsBlack XOR flipped`。
 - 16 GUI 细节 — P2-5 全部 15 项:ActionPopup 实例态 + dismiss(Tag)、PopupOverlay 实例态 + 命中消费、ChatBoxWidget 长度上限 + scissor + scroll 保留 + § 过滤、SpectatorListWidget scissor + 滚轮方向、CChessBoardScreen 棋盘点击清输入焦点、PlayerAvatarCache LRU + TTL、TextSanitizer § 剥除、ActionButtonsWidget BTN_H=24 与 Screen 对齐、`Action.enabled` 删除。
 - 18 对局持久化 — `CChessTileEntity` 存 8 键 NBT(FEN/红UUID/黑UUID/sdPlayer/moveCount/result/mode/state),`load/saveTag` + `fromTag` 防御 + 双空降 WAITING。
 - 19 PVC — `PvcController` 守护线程 + `GameLogic.tryEngineMove` + `SessionManager.joinGame` PVC 分支 + `isComputerToMove` 三状态守卫 + 服务端 i18n 三键。
@@ -249,7 +250,6 @@ org.gradle.java.installations.auto-download=false
 - **服务端 i18n 完整化(本次新增)** — ChessInteractC2SPacket / GameMessages / ModCommands 全部硬编码中文 → translatable,lang 文件 116→119 键,zh=zh=en 完全对称;唯一残留为 `[qisheng]` 前缀的 admin/operator 反馈。
 
 **未落地(本轮可选)**:
-- 15 棋盘可旋转 — 没做。
 - 17 音效/走子动画/最近一步高亮 — 没做。
 - 实机验证 — 容器无 LWJGL Display 与 EULA TTY,无法跑 MC client/server。
 

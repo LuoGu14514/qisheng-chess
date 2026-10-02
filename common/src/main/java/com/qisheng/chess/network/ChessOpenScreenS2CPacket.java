@@ -21,6 +21,8 @@ import java.util.UUID;
  *  - buf[N+5]    = myRole byte (-1=旁观,0=红,1=黑)
  *  - buf[N+6]    = {@code hasDests} byte (0/1)，仅当服务端下发了合法落点位图时为 1
  *  - buf[N+7..N+38]（可选）256 格合法落点位图，与 {@link ChessSyncS2CPacket} 同格式
+ *  - buf[N+39]   = flipped byte (0/1)：棋盘 BlockState.facing==SOUTH 时为 1，
+ *                  客户端在 {@code viewerIsBlack} 之上再翻 180°，让红方显示在上方。
  *
  * 客户端收到后,必须通过 {@link Minecraft#execute(Runnable)} 把
  * {@code setScreen} 派发到渲染线程执行。Architectury 的 S2C 接收回调
@@ -40,6 +42,7 @@ public class ChessOpenScreenS2CPacket {
         int myRole = buf.readByte();   // -1=spec, 0=red, 1=black
         boolean hasDests = buf.readBoolean();
         boolean[] legalDests = hasDests ? LegalDestsBitmap.read(buf) : null;
+        boolean flipped = buf.readBoolean();
 
         var mc = Minecraft.getInstance();
         if (mc.player == null) return;
@@ -49,6 +52,6 @@ public class ChessOpenScreenS2CPacket {
         // post-1.19.4 preferred name (send() is an alias).
         mc.execute(() -> mc.setScreen(
                 new CChessBoardScreen(pos, self, fen, sdPlayer, stateOrd, selectPoint, myRole,
-                        legalDests)));
+                        legalDests, flipped)));
     }
 }

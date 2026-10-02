@@ -123,5 +123,7 @@
   "qisheng.chess.cmd.status.line": "[qisheng] Board @ %1$s | state=%2$s | mode=%3$s | you=%4$s | turn=%5$s | selected=%6$s | result=%7$s | spectators=%8$s",
   "qisheng.chess.cmd.mode.changed": "[qisheng] Global mode set to %1$s.",
   "qisheng.chess.cmd.mode.label_pvp": "PVP",
-  "qisheng.chess.cmd.mode.label_pvc": "PVC"
+  "qisheng.chess.cmd.mode.label_pvc": "PVC",
+  "qisheng.chess.screen.variant.international.placeholder.line1": "International chess — server engine ready",
+  "qisheng.chess.screen.variant.international.placeholder.line2": "GUI renderer will ship in v0.3.2 (8×8 board + promotion + castling)"
 }

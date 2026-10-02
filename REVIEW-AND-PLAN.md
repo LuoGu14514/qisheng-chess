@@ -253,6 +253,7 @@ org.gradle.java.installations.auto-download=false
 - 17 音效/走子动画/最近一步高亮 — **v0.2.1 已落地**:最近一步高亮 (`drawLastMoveOverlay` 画 `0xC0FFEB6B` 半透明黄底色块,服务端 `GameSession.lastMoveSrc/lastMoveDst` 随 `CHESS_SYNC` + `CHESS_OPEN_SCREEN` 各加 4 字节下发,`ChineseChessEngine.isSquare()` 兜底越界) + 走子音效 (`SoundEvents.NOTE_BLOCK_PLING`,`applySync` 检测 `lastSrc/lastDst` 变化时播放,`Minecraft.execute()` 派发到渲染线程)。走子动画 (`Position.movePiece` 时 200ms 滑动插值) 仍未做。
 - `[qisheng]` admin 反馈 — **v0.2.1 已落地**:`ModCommands.doPurge/doMove/doSelect` 三处 `Component.literal("[qisheng] ...")` → `translatable`,lang 文件 119→122 键对称。
 - 实机验证 — 容器无 LWJGL Display 与 EULA TTY,无法跑 MC client/server。
+- **v0.3.1 (2026-10-02 末轮 + 引擎抽象 + 国际象棋)**:BoardVariant 注册表 + XiangqiVariant 迁移 + InternationalChessVariant 完整 FIDE 规则 + variant-aware 重构(GameSession / GameLogic / GameBroadcaster / PvcController)+ 网络协议末尾 1 字节 variantId + CChessBoardScreen 国际象棋占位提示;测试 60→**79**(XiangqiVariantTest 9 + InternationalChessVariantTest 11 + LegalDestsBitmapTest 6)全绿。详见 §9。
 
 ---
 
@@ -515,4 +516,76 @@ daemon 仍由 `gradle/gradle-daemon-jvm.properties` 钉在 JDK 25，所以 Loom 
 **测试**：新增 `common/src/test/java/com/qisheng/chess/engine/xqwlight/SearchTimeBudgetTest.java`（5 例，`@Timeout(60)` 兜底）：
 60 ms 预算要在 5 秒内返回、1 ms 极端预算仍返回合法着法（走 `fallbackMove`）、连搜 4 轮后盘面/走子方/`zobristKey`/`zobristLock`/`moveNum`/双方子力**逐字段不变**、
 `searchMain(0, 30)` 不让 `getKNPS()` 除零、无预算搜索仍然正常。辅助方法 `playSomeMoves(int halfMoves)` 用"每步取第 `(i*7+k)` 个引擎接受的着法"造出一个确定性且合法的中局，避免手写 FEN 出错。
+
+---
+
+## 9. v0.3.1 引擎抽象 + 国际象棋执行记录
+
+目标：把 §3 路线图里的「v0.3 引擎版」从「单一 xiangqi」扩展为「BoardVariant 注册表 + 第二棋类」，
+并新增完整可玩的国际象棋子规则。GUI 仅展示「国际象棋 GUI 占位」（v0.3.2 路线）；
+引擎、协议、持久化全部 variant-aware。
+
+### 9.1 新增 / 变更
+
+| 文件 | 内容 |
+|---|---|
+| `engine/BoardVariant.java`（新） | 接口：`id / displayNameKey / boardFiles / boardRanks / totalSquares / initialFen / initialState / parseState / isValidSquare / pieceAt / sideOfPiece / canMove / applyMove / toFen / sideToMove / setSideToMove / searchBestMove / firstLegalMove / isInCheck / isCheckmate / isStalemate / pieceFenChar / legalDestsBitmapSize` |
+| `engine/BoardState.java`（新） | 标记接口，`engine/xqwlight/Position` 直接 `implements BoardState`（不包一层包装） |
+| `engine/Move.java`（新） | `record Move(int src, int dst)` + `Move.NONE = (-1, -1)` |
+| `engine/BoardRegistry.java`（新） | `DEFAULT_ID = "xiangqi"`；注册 `XiangqiVariant` + `InternationalChessVariant`；`getByIdOrDefault` 兜底未知 id 回落 xiangqi |
+| `engine/xiangqi/XiangqiVariant.java`（新, 152 行） | 薄包装 xqwlight `Position`：`canMove / applyMove / toFen / isInCheck` 全部走 `ChineseChessEngine` 门面 + `Position.makeMove / legalMove`；`isInCheck` 用 save-flip-restore sdPlayer 包裹，不污染 caller state；`pieceFenChar` 不引用 `ChineseChessEngine.PIECE_LETTERS` (private)，改为 `switch (pc & 7)` 映射 将/士/象/马/车/炮 → `k/a/b/n/r/c`；`isStalemate` 永远 false |
+| `engine/international/IntChessBoard.java`（新, 80 行） | `byte[64]` 棋盘；base 1..6=Pawn/Knight/Bishop/Rook/Queen/King；白=+8，黑=+16；A1=0..H8=63；`fileOf / rankOf / sq(file,rank)`；`sdPlayer / castling / enPassantSq / halfmoveClock / fullmoveNumber` |
+| `engine/international/InternationalChessVariant.java`（新, 692 行） | 完整 FIDE 规则：完整 FEN parse (1-6 字段) + `isPseudoLegal` (pawn / knight / bishop / rook / queen / king + castling) + `isSquareAttacked` (pawn 2 对角 + knight 8L + sliders 8 向 + king 8 邻) + `wouldExposeKing` (move/unmove) + `makeMove` (全部副作用 + 升变自动 queen + 王车易位同时挪车 + 50 步时钟 + castling rights 更新) + `searchBestMove = firstLegalMove wrapper` (v0.3.1 不带 alpha-beta) + `encodeMove = src \| (dst<<6)`, `srcOf = mv & 0x3F`, `dstOf = (mv>>>6) & 0x3F` + `legalDestsBitmapSize()` = 8 |
+| `pvp/GameSession.java` | 加 `variantId` 字段 + NBT 键 `Variant` + `getVariantId / setVariantId / getBoardState / getVariant`；`checkGameOver()` 走 `v.isCheckmate` + xiangqi 走 `isRepeat / reachMoveLimit` + international 走 `halfmoveClock>=100` + `v.isStalemate`；老存档无 TAG_VARIANT → xiangqi |
+| `pvp/GameLogic.java` | `trySelect / applyMove` 走 `variant.canMove / variant.applyMove`；xiangqi 专属 `applyXiangqiIrrev` 在 captured 时 `pos.setIrrev()` |
+| `pvp/GameBroadcaster.java` | `broadcastSync` + `sendOpenScreen` 末尾写 1 字节 `variantId` (UTF-8)，合法落点位图长度走 `v.totalSquares()` |
+| `pvp/PvcController.java` | `searchThenPlay / play` 走 `variant.searchBestMove(fen, 19, THINK_MILLIS)` + fallback `variant.firstLegalMove(fen)`；锁定的 variantId 与 session.currentVariantId 不一致时回退 fallback（避免 variant flip 中间态） |
+| `network/LegalDestsBitmap.java` | 改 totalSquares-aware：`write / read` 都接受 `int totalSquares`；保留 `XIANGQI_SIZE=256 / XIANGQI_WIRE_SIZE=32` 常量 + 无参 overload 兼容旧测试；`wireSize(totalSquares) = (totalSquares+7)/8` |
+| `network/ChessSyncS2CPacket.java` | 末尾多读 1 字节 `variantId`，用 `totalSquaresFor(variantId)` 决定位图大小（xiangqi=256, international=64）；EOFException 回落 xiangqi |
+| `network/ChessOpenScreenS2CPacket.java` | 同上 |
+| `client/CChessBoardScreen.java` | 加 `String variantId = "xiangqi"` 字段 + 构造器重载 + `applySync(..., String variantId)` 重载 + `drawInternationalPlaceholder(gfx)`；render 里若 `"international".equals(variantId)` 走占位提示（"国际象棋 GUI 留待 v0.3.2"），否则继续 xiangqi 渲染 |
+| `gradle.properties` | `mod_version = 0.3.1` |
+
+### 9.2 关键设计（防止「为什么这个 hook 在那里」）
+
+1. **BoardVariant 接口方法尽量与原 ChineseChessEngine 同形**（`canMove / applyMove / toFen / firstLegalMove / searchBestMove`），让 PvcController + GameLogic + GameBroadcaster 几乎不需要 if/else 就能切换棋类。
+2. **BoardState 是标记接口**，`Position implements BoardState` —— 不需要包装类，避免给 `Position` 加 24 个 default 方法；GameSession 持 `BoardState`，GameLogic 用 `variant` 调方法。
+3. **variantId 在 buf 末尾写**：方便旧客户端先读旧字段再 EOFException 回落 xiangqi（向后兼容）。`writeUtf` 而不是 `writeByte` —— 未来再加 `xiangqi_fork / international960 / shogi` 等也兼容。
+4. **协议变体字段 + 旧 EOF 兜底双保险**：client 端 `try { buf.readUtf() } catch (EOFException) { variantId = "xiangqi"; }` —— 不需要改旧 jar 即可玩。
+5. **`wouldExposeKing` 不处理 castling 的 rook 移动**：因为王车易位的安全性（王不穿过 f1 的被将）已经在 `kingMoveOrCastle` 里用 `isSquareAttacked(b, src+step, opp)` 提前检查了；`wouldExposeKing` 只看「落子后己王被将」，王车易位单独走 `kingMoveOrCastle` 路径，所以 canMove 仍正确。
+6. **`PvcController.play` 锁 variantId 一致性**：`session.getVariantId()` 在 worker 排队期间可能 flip，回退到 `firstLegalMove(fen)` 而不是直接 `searchBestMove`，避免拿到错棋类的结果。`IN_FLIGHT.remove(key)` 仍在 `broadcastSync` 之前。
+
+### 9.3 测试（共 19 条新增 + 60 既有 = 79 条全绿）
+
+| 测试类 | 用例数 | 覆盖 |
+|---|---|---|
+| `XiangqiVariantTest` | 9 | ID 稳定 / 9×10=90 / INIT FEN round-trip / Position implements BoardState / canMove 通过合法车 + 红车不能斜走 / applyMove 翻 sdPlayer / isInCheck 不污染 caller state / firstLegalMove 至少一个 / searchBestMove 合法着法 / xiangqi hasNoStalemate |
+| `InternationalChessVariantTest` | 11 | ID / 尺寸 / INIT_FEN round-trip / 初始 16/16 pieces / malformedFenReturnsNull（7 个错 FEN）/ initialNotInCheck / 白方 O-O + castling rights 清除 / 吃过路兵 / 升变后 FEN 头 `Q3k3/8/...` / Scholar's Mate（`r1bqk2r/pppp1Qpp/...` → `isCheckmate` true）/ 50 步和棋（halfmoveClock>=100 → `isStalemate` true）/ firstLegalMove 在合法局面返合法 Move，在 mate 局面返 Move.NONE |
+| `LegalDestsBitmapTest` | 6 | totalSquares-aware write/read round-trip + 边界（0, 1, 255, 256, 全 true, 全 false, 跨字节位）+ 拒绝 null |
+
+**测试踩坑**：
+- `Position.SIDE_TAG` 是 **static METHOD** 不是 field：`SIDE_TAG(0)=8, SIDE_TAG(1)=16`。调用方式 `Position.SIDE_TAG(pos.sdPlayer)`。
+- `Position.sdPlayer` 语义：0=红 1=黑，INIT 默认 0。INIT FEN 无 side 后缀时 sdPlayer 留 0，Position.toFen() 带 ' w'/' b' 后缀。
+- 测试 sq helper：`rank + RANK_TOP`（rank 0 = 黑顶, rank 9 = 红底，与 FEN 第一段视角一致）。
+- 升变 FEN 黑王在 a8 挡 pawn forward：`k7/P7/...` → 改 `4k3/P7/...`（黑王挪 e8）。
+- 升变后 toFen rank 8 = "Q3k3"（升变后 pawn 变 Q，黑王不动）。
+- 王车易位 toFen assertion：整 FEN 含白王字符 `K`，`assertFalse(toFen.contains("K"))` 是 test bug —— 改取 `parts[2]`（castling field）检查 `!contains("K")` 且 `!contains("Q")`。
+- Scholar's Mate FEN：`r1bqk2r/pppp1Qpp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 0 4`（Qxf7# 真将死局面）。
+- `LegalDestsBitmap.write(buf, dests)` 单参 overload：先 null check 再 length 检查（先访问 length 会 NPE）。
+
+### 9.4 验收
+
+```
+$env:JAVA_HOME='D:\工具\jdk-17.0.20.1+1'; .\gradlew.bat :common:compileJava :common:test :fabric:compileJava :fabric:remapJar
+BUILD SUCCESSFUL 23s (4 executed, 8 up-to-date)
+```
+
+**79 个用例全绿**。产物 `qisheng_chess-fabric-0.3.1.jar`（jar 命名需 `mod_version=0.3.1`）。
+
+### 9.5 v0.3.1 仍未决（v0.3.2 路线）
+
+- **国际象棋 GUI 仅占位提示**：真实棋盘 + 棋子 + 升变选择器 / 走法预览留待 v0.3.2。
+- **国际象棋引擎无 alpha-beta**：搜索只是 `firstLegalMove` wrapper，v0.3.2 引入 negamax + transposition table。
+- **协议 variantId 字段加在 buf 末尾**：旧 v0.6 客户端读 `readUtf()` 会 EOFException，已加 try/catch 兜底。
+- **服务端没有实机验证**（容器无 LWJGL Display + 无 EULA TTY）—— 国际象棋 / 占位 GUI 真实表现以实机为准。
 

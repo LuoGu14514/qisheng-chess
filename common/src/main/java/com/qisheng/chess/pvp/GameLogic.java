@@ -1,6 +1,7 @@
 package com.qisheng.chess.pvp;
 
-import com.qisheng.chess.engine.ChineseChessEngine;
+import com.qisheng.chess.engine.BoardState;
+import com.qisheng.chess.engine.BoardVariant;
 import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.util.CChessUtil;
 
@@ -11,6 +12,14 @@ import java.util.UUID;
  *   - {@link com.qisheng.chess.command.ModCommands} (CLI /qisheng select|move)
  *   - {@link com.qisheng.chess.network.ChessInteractC2SPacket} (C2S packet)
  *   - Future GUI / hotkey handlers
+ *
+ * <p>As of v0.3.1, game logic dispatches through
+ * {@link GameSession#getVariant()} so xiangqi and international chess share
+ * the same input path. The xiangqi-specific fallback (the
+ * {@code captured()} / {@code setIrrev()} dance that keeps xqwlight's
+ * threefold-repetition counter accurate) stays inside
+ * {@link #applyXiangqiIrrev} and runs only when the session is actually
+ * playing xiangqi — every other variant skips it.
  *
  * Mirrors TLM {@code BlockCChess.use()} core (TartaricAcid/TouhouLittleMaid,
  * 1.18.2, MIT-licensed Java):
@@ -73,9 +82,8 @@ public final class GameLogic {
         int role = session.getPlayerRole(playerId);
         if (role != session.getSdPlayer()) return SelectOutcome.NOT_YOUR_TURN;
 
-        // isSquare() (not a bare 0..255 range check) — the engine's IN_BOARD /
-        // IN_FORT tables and the piece-type switch both assume a playable point.
-        if (!ChineseChessEngine.isSquare(sq)) return SelectOutcome.OUT_OF_BOUNDS;
+        BoardVariant v = session.getVariant();
+        if (!v.isValidSquare(sq)) return SelectOutcome.OUT_OF_BOUNDS;
 
         // Toggle: re-selecting the currently selected square deselects it.
         // Lets the client UX work as "click own piece to highlight; click
@@ -85,15 +93,16 @@ public final class GameLogic {
             return SelectOutcome.OK;
         }
 
-        Position p = session.getChessData();
-        byte piece = p.squares[sq];
+        BoardState bs = session.getBoardState();
+        byte piece = v.pieceAt(bs, sq);
         if (piece == 0) return SelectOutcome.EMPTY_SQUARE;
 
-        // TLM allows only red-side picks because the player is always red.
-        // PVP layer: piece must match the player's role side.
-        boolean pieceIsRed = CChessUtil.isRed(piece);
+        // The variant decides which side a byte represents (xiangqi: red+8 vs
+        // black+16; international chess uses the same byte layout by happy
+        // coincidence). We only need the role-to-side mapping.
+        int pieceSide = v.sideOfPiece(bs, sq);
         boolean playerIsRed = (role == 0);
-        if (pieceIsRed != playerIsRed) return SelectOutcome.WRONG_PIECE_SIDE;
+        if ((pieceSide == 0) != playerIsRed) return SelectOutcome.WRONG_PIECE_SIDE;
 
         session.setSelectPoint(sq);
         return SelectOutcome.OK;
@@ -136,29 +145,34 @@ public final class GameLogic {
 
     /** The shared tail of every move path: validate, mutate, flip, check game-over. */
     private static MoveOutcome applyMove(GameSession session, int src, int dst) {
-        if (!ChineseChessEngine.isSquare(src) || !ChineseChessEngine.isSquare(dst)) {
+        BoardVariant v = session.getVariant();
+        BoardState bs = session.getBoardState();
+
+        if (!v.isValidSquare(src) || !v.isValidSquare(dst)) {
             return MoveOutcome.OUT_OF_BOUNDS;
         }
 
-        Position p = session.getChessData();
         // canMove() rejects src == dst, an empty/off-board source and own-piece
-        // captures before the engine's unchecked tables are touched, so a
+        // captures before the variant's piece tables are touched, so a
         // malformed packet can never throw on the server tick thread.
-        if (!ChineseChessEngine.canMove(p, src, dst)) return MoveOutcome.ILLEGAL_MOVE;
-        int mv = Position.MOVE(src, dst);
+        if (!v.canMove(bs, src, dst)) return MoveOutcome.ILLEGAL_MOVE;
 
-        // makeMove flips Position.sdPlayer internally via changeSide().
-        // Returns false when the move would expose own king (TLM aborts here).
-        boolean notChecked = p.makeMove(mv);
-        if (!notChecked) return MoveOutcome.KING_EXPOSED;
+        // applyMove mutates the board and flips sdPlayer (or its variant-local
+        // equivalent). For xiangqi, applying through the variant returns
+        // {@code false} when the move would expose the mover's own king —
+        // other variants roll check-detection into canMove() already, so they
+        // always return {@code true} from applyMove when canMove() did.
+        if (!v.applyMove(bs, src, dst)) return MoveOutcome.KING_EXPOSED;
 
-        // TLM: capture resets the irreversible counter for repStatus(3) accuracy.
-        if (p.captured()) {
-            p.setIrrev();
-        }
+        // Xiangqi-only bookkeeping: a capture flips xqwlight's threefold-
+        // repetition irreversible counter so the next isRepeat() check is
+        // accurate. International chess's draw clock (halfmoveClock) is
+        // updated inside IntChessBoard.makeMove(), nothing for us to do.
+        applyXiangqiIrrev(bs);
 
-        // Mirror Position.sdPlayer into GameSession.sdPlayer (PVP state machine
-        // tracks it independently; chessData already flipped itself).
+        // The session's side-to-move is a separate piece of state from the
+        // board's own counter (mostly so it can be inspected independently of
+        // the engine's internals). Flip it to match.
         session.setSdPlayer(1 - session.getSdPlayer());
         // TLM preserves destination as the next "selected" point.
         session.setSelectPoint(dst);
@@ -175,5 +189,16 @@ public final class GameLogic {
             session.setState(GameState.FINISHED);
         }
         return MoveOutcome.OK;
+    }
+
+    /**
+     * If the live board is xiangqi, run the xqwlight-specific
+     * {@code captured()} / {@code setIrrev()} pair so threefold repetition
+     * stays accurate. For every other variant this is a no-op — the variant
+     * already updates whatever counter it uses inside {@code applyMove}.
+     */
+    private static void applyXiangqiIrrev(BoardState bs) {
+        if (!(bs instanceof Position p)) return;
+        if (p.captured()) p.setIrrev();
     }
 }

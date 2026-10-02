@@ -1,6 +1,12 @@
 package com.qisheng.chess.pvp;
 
+import com.qisheng.chess.engine.BoardRegistry;
+import com.qisheng.chess.engine.BoardState;
+import com.qisheng.chess.engine.BoardVariant;
 import com.qisheng.chess.engine.ChineseChessEngine;
+import com.qisheng.chess.engine.international.InternationalChessVariant;
+import com.qisheng.chess.engine.international.IntChessBoard;
+import com.qisheng.chess.engine.xiangqi.XiangqiVariant;
 import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.network.SwitchPackets;
 import com.qisheng.chess.util.CChessUtil;
@@ -11,11 +17,16 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * 一局中国象棋的状态机
+ * 一局棋的状态机
  *
  * 第二批新增字段:
  *  - pendingDrawFrom    UUID:发起待处理求和的玩家(null=无)
  *  - pendingSwitch      SwitchPackets.Pending:发起待处理切换请求的快照(null=无)
+ *
+ * 第三批新增字段 (v0.3.1):
+ *  - variantId          String:对应 {@link BoardVariant#getId()}(xiangqi / international)。
+ *                      旧存档没有这一项,默认 {@link BoardRegistry#DEFAULT_ID},
+ *                      即 xiangqi,与 v0.2.x 行为一致。
  *
  * 持久化(0.1.2 起):{@link #save()} / {@link #fromTag(CompoundTag)} 把整局状态
  * 序列化进 {@code CChessTileEntity} 的 NBT。**有意不存**旁观名单与两个待处理
@@ -27,6 +38,7 @@ public class GameSession {
     private GameResult result = GameResult.ONGOING;
 
     private final Position chessData;
+    private String variantId = BoardRegistry.DEFAULT_ID;
 
     private UUID redPlayer = null;
     private UUID blackPlayer = null;
@@ -80,6 +92,33 @@ public class GameSession {
     public void setResult(GameResult r) { this.result = r; }
 
     public Position getChessData() { return chessData; }
+
+    /**
+     * Stable id of the {@link BoardVariant} this session is using — {@code "xiangqi"}
+     * or {@code "international"}. Persisted in NBT; older saves default to
+     * {@link BoardRegistry#DEFAULT_ID} so v0.2.x worlds load unchanged.
+     */
+    public String getVariantId() { return variantId; }
+
+    /**
+     * Swap the variant this session is running. Custom versions cannot be
+     * changed mid-game: callers are responsible for making sure the FEN on the
+     * board makes sense for the new variant before invoking this.
+     */
+    public void setVariantId(String id) {
+        this.variantId = id == null ? BoardRegistry.DEFAULT_ID : id;
+    }
+
+    /** Variant-aware view of the underlying board state. */
+    public BoardState getBoardState() { return chessData; }
+
+    /**
+     * The {@link BoardVariant} for this session — convenience wrapper around
+     * {@link BoardRegistry#getByIdOrDefault(String)}.
+     */
+    public BoardVariant getVariant() {
+        return BoardRegistry.getByIdOrDefault(variantId);
+    }
 
     public UUID getRedPlayer() { return redPlayer; }
     public UUID getBlackPlayer() { return blackPlayer; }
@@ -146,11 +185,26 @@ public class GameSession {
     public void setPendingSwitch(SwitchPackets.Pending p) { this.pendingSwitch = p; }
 
     public GameResult checkGameOver() {
-        if (CChessUtil.isRepeat(chessData)) return GameResult.DRAW;
-        if (CChessUtil.reachMoveLimit(chessData)) return GameResult.DRAW;
-        if (chessData.isMate()) {
+        BoardVariant v = getVariant();
+        BoardState state = chessData;
+
+        if (v.isCheckmate(state)) {
             return sdPlayer == 0 ? GameResult.BLACK_WIN : GameResult.RED_WIN;
         }
+
+        // Variant-specific draw rules. Two flavours right now:
+        //   - Xiangqi has threefold / move-limit drawn through the xqwlight
+        //     board's own counters (repStatus + distance).
+        //   - International chess has the 50-move rule (halfmoveClock >= 100).
+        if (v instanceof XiangqiVariant) {
+            if (CChessUtil.isRepeat(chessData)) return GameResult.DRAW;
+            if (CChessUtil.reachMoveLimit(chessData)) return GameResult.DRAW;
+        }
+        if (v instanceof InternationalChessVariant && state instanceof IntChessBoard b) {
+            if (b.halfmoveClock >= 100) return GameResult.DRAW;
+        }
+
+        if (v.isStalemate(state)) return GameResult.DRAW;
         return GameResult.ONGOING;
     }
 
@@ -166,6 +220,7 @@ public class GameSession {
     private static final String TAG_BLACK = "Black";
     private static final String TAG_LAST_SRC = "LastSrc";
     private static final String TAG_LAST_DST = "LastDst";
+    private static final String TAG_VARIANT = "Variant";
 
     /** Snapshot of everything that must survive a server restart. */
     public CompoundTag save() {
@@ -180,6 +235,7 @@ public class GameSession {
         if (blackPlayer != null) tag.putUUID(TAG_BLACK, blackPlayer);
         tag.putInt(TAG_LAST_SRC, lastMoveSrc);
         tag.putInt(TAG_LAST_DST, lastMoveDst);
+        tag.putString(TAG_VARIANT, variantId);
         return tag;
     }
 
@@ -210,6 +266,10 @@ public class GameSession {
         s.lastMoveSrc = ChineseChessEngine.isSquare(src) ? src : -1;
         int dst = tag.getInt(TAG_LAST_DST);
         s.lastMoveDst = ChineseChessEngine.isSquare(dst) ? dst : -1;
+        // Older saves have no Variant tag. They are xiangqi by construction;
+        // loading them under any other id would crash the first move.
+        String savedVariant = tag.getString(TAG_VARIANT);
+        s.variantId = savedVariant.isEmpty() ? BoardRegistry.DEFAULT_ID : savedVariant;
         // A game cannot be "playing" with nobody seated; that only happens when
         // the file was edited. Demote instead of leaving a zombie game.
         if (s.state == GameState.PLAYING && s.redPlayer == null && s.blackPlayer == null) {

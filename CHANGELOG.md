@@ -5,6 +5,71 @@
 
 ---
 
+## [0.3.1] — 引擎抽象 + 国际象棋
+
+目标：把 v0.3 引擎路线从「单一 xiangqi」扩展为「BoardVariant 注册表 + 第二棋类」，并新增完整可玩的国际象棋子规则。GUI 仅展示「国际象棋 GUI 占位」(v0.3.2 路线)；引擎、协议、持久化全部 variant-aware。
+
+### 变更
+
+#### BoardVariant 接口与注册表
+
+- 新增 `engine/BoardVariant` 接口：`id / displayNameKey / boardFiles / boardRanks / totalSquares / initialFen / initialState / parseState / isValidSquare / pieceAt / sideOfPiece / canMove / applyMove / toFen / sideToMove / setSideToMove / searchBestMove / firstLegalMove / isInCheck / isCheckmate / isStalemate / pieceFenChar / legalDestsBitmapSize`。
+- `BoardState` 是标记接口，`engine/xqwlight/Position` 直接 `implements BoardState`（不包一层包装）。
+- `Move` 是 record `(int src, int dst)` + `Move.NONE = (-1, -1)`。
+- `engine/BoardRegistry.DEFAULT_ID = "xiangqi"`，注册 `XiangqiVariant` + `InternationalChessVariant`；`getByIdOrDefault` 兜底未知 id 回落 xiangqi。
+
+#### XiangqiVariant（迁移层）
+
+- `engine/xiangqi/XiangqiVariant.java` 薄包装 xqwlight `Position`：`canMove` / `applyMove` / `toFen` / `isInCheck` 全部走 `ChineseChessEngine` 门面 + `Position.makeMove` / `legalMove`；`isInCheck` 用 save-flip-restore sdPlayer 包裹，不污染 caller state。
+- `pieceFenChar` 不引用 `ChineseChessEngine.PIECE_LETTERS` (private)，改为 `switch (pc & 7)` 映射 将/士/象/马/车/炮 → `k/a/b/n/r/c`。
+- `isStalemate` 永远 false（xiangqi 无逼和判定，逼和靠 `isMate` + `repStatus`）。
+
+#### InternationalChessVariant（全新）
+
+- `engine/international/IntChessBoard.java` (80 行): `byte[64]` 棋盘；base 1..6=Pawn/Knight/Bishop/Rook/Queen/King；白=+8，黑=+16；A1=0..H8=63；`fileOf/rankOf/sq(file,rank)`；`sdPlayer/castling/enPassantSq/halfmoveClock/fullmoveNumber`。
+- `engine/international/InternationalChessVariant.java` (692 行) 完整实现：
+  - 完整 FEN parse (1-6 字段任意子集)
+  - `isPseudoLegal` 走 pawnPseudoLegal / knightL / bishopClearPath / rookClearPath / queenClearPath / kingMoveOrCastle
+  - `kingMoveOrCastle` 检查王车易位: rank 一致 + 双方 rights mask + 车在 rookSq + 路径 f1/g1 空 + 王不在被将 + 不穿过被将 + 不停在被将
+  - `isSquareAttacked`: pawn (2 对角) + knight (8 L) + sliders (8 向) + king (8 邻)
+  - `wouldExposeKing` 在 move/unmove 后看自王是否被将
+  - `makeMove` 全部副作用: 升变自动 queen + 王车易位同时挪车 + 双吃过路兵清掉被吃的 pawn + 50 步时钟 + castling rights 更新
+  - `searchBestMove` 是 `firstLegalMove` 的薄包装 (v0.3.1 不带 alpha-beta, v0.3.2 引入)
+  - `encodeMove = src | (dst<<6)`, `srcOf = mv & 0x3F`, `dstOf = (mv>>>6) & 0x3F`
+  - `legalDestsBitmapSize()` = 8
+
+#### variant-aware 重构
+
+- `pvp/GameSession`: 新增 `variantId` 字段 + NBT 键 `Variant` (`save` 写、`fromTag` 读; 旧存档无 TAG_VARIANT → 回落 xiangqi); 新增 `getVariantId / setVariantId / getBoardState / getVariant` API; `checkGameOver()` 走 `v.isCheckmate` + xiangqi 走 `isRepeat / reachMoveLimit` + international 走 `halfmoveClock>=100` + `v.isStalemate`。
+- `pvp/GameLogic.trySelect / applyMove` 走 `variant.canMove / variant.applyMove`; xiangqi 专属 `applyXiangqiIrrev` 在 captured 时 `pos.setIrrev()`。
+- `pvp/GameBroadcaster.broadcastSync` + `sendOpenScreen` 末尾写 1 字节 `variantId` (UTF-8),合法落点位图长度走 `v.totalSquares()`。
+- `pvp/PvcController.searchThenPlay / play` 走 `variant.searchBestMove(fen, 19, THINK_MILLIS)` + fallback `variant.firstLegalMove(fen)`; 锁定的 variantId 与 session.currentVariantId 不一致时回退 fallback (避免 variant flip 中间态)。
+
+#### 网络协议
+
+- `network/LegalDestsBitmap` 改 totalSquares-aware: `write / read` 都接受 `int totalSquares`; 保留 `XIANGQI_SIZE=256 / XIANGQI_WIRE_SIZE=32` 常量 + 无参 overload 兼容旧测试; `wireSize(totalSquares) = (totalSquares+7)/8`。
+- `network/ChessSyncS2CPacket` + `ChessOpenScreenS2CPacket` 末尾多读 1 字节 `variantId`,用 `totalSquaresFor(variantId)` 决定位图大小 (xiangqi=256, international=64); EOFException 回落 xiangqi (旧客户端兼容)。
+
+#### GUI 占位
+
+- `client/CChessBoardScreen` 新增字段 `String variantId = "xiangqi"`,构造器 + `applySync` 接收 variantId; 在 `render` 里若 `"international".equals(variantId)` 走 `drawInternationalPlaceholder(gfx)` (显示「国际象棋 GUI 留待 v0.3.2」占位),否则继续 xiangqi 渲染。
+
+### 测试
+
+- `engine/xiangqi/XiangqiVariantTest`: 9 条用例, ID 稳定、9×10=90、INIT FEN round-trip、`Position implements BoardState`、`canMove` 通过合法车/红车不能斜走、`applyMove` 翻 sdPlayer、`isInCheck` 不污染 caller state、`firstLegalMoveReturnsAtLeastOne`、`searchBestMoveReturnsLegalMove`、`xiangqiHasNoStalemate`。
+- `engine/international/InternationalChessVariantTest`: 11 条用例, ID/尺寸、INIT_FEN round-trip、初始 16/16 pieces、`malformedFenReturnsNull` (7 个错 FEN,均返 null 不抛)、`initialNotInCheck`、白方 O-O + castling rights 清除、吃过路兵、白兵 a7→a8 升变后 FEN 头 `Q3k3/8/...`、Scholar's Mate (Qxf7# 后 `isCheckmate` true)、50 步和棋 (`halfmoveClock>=100` → `isStalemate` true)、`firstLegalMove` 在合法局面返合法 Move 在 mate 局面返 `Move.NONE`。
+- `network/LegalDestsBitmapTest`: 6 条用例, totalSquares-aware write/read round-trip + 边界 (0, 1, 255, 256, 全 true, 全 false, 跨字节位)+ 拒绝 null。
+- 测试总数 60 → **79**,**全绿**。
+
+### 已知限制
+
+- 国际象棋 GUI 仅占位提示;真实棋盘 + 棋子 + 升变选择器 / 走法预览留待 v0.3.2。
+- 国际象棋引擎无 alpha-beta (搜索只是 firstLegalMove wrapper),v0.3.2 引入。
+- 协议 variantId 字段加在 buf 末尾;旧 v0.6 客户端读 `readUtf()` 会 EOFException,需要捕捉并回落 xiangqi。
+- 服务端没有实机验证（容器无 LWJGL Display + 无 EULA TTY）—— 国际象棋 / 占位 GUI 真实表现以实机为准。
+
+---
+
 ## [0.2.1] — v0.2 体验版收尾
 
 目标：把 v0.2 路线上还没落地的最后三项（最近一步高亮、走子音效、`[qisheng]` admin 反馈 i18n）补上。

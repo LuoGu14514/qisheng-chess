@@ -123,5 +123,7 @@
   "qisheng.chess.cmd.status.line": "[qisheng] 棋盘 @ %1$s | 状态=%2$s | 模式=%3$s | 你=%4$s | 轮到=%5$s | 选中=%6$s | 结果=%7$s | 旁观=%8$s",
   "qisheng.chess.cmd.mode.changed": "[qisheng] 全局模式已设为 %1$s",
   "qisheng.chess.cmd.mode.label_pvp": "PVP",
-  "qisheng.chess.cmd.mode.label_pvc": "PVC"
+  "qisheng.chess.cmd.mode.label_pvc": "PVC",
+  "qisheng.chess.screen.variant.international.placeholder.line1": "国际象棋 — 服务端引擎已就绪",
+  "qisheng.chess.screen.variant.international.placeholder.line2": "GUI 渲染器将在 v0.3.2 落地 (8×8 棋盘 + 升变 + 王车易位)"
 }

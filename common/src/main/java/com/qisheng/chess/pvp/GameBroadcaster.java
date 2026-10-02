@@ -1,8 +1,8 @@
 package com.qisheng.chess.pvp;
 
 import com.qisheng.chess.block.CChessBoardBlock;
-import com.qisheng.chess.engine.ChineseChessEngine;
-import com.qisheng.chess.engine.xqwlight.Position;
+import com.qisheng.chess.engine.BoardState;
+import com.qisheng.chess.engine.BoardVariant;
 import com.qisheng.chess.network.DrawPackets;
 import com.qisheng.chess.network.LegalDestsBitmap;
 import com.qisheng.chess.network.ModNetwork;
@@ -89,7 +89,8 @@ public final class GameBroadcaster {
         // Same reason, for the computer opponent: a PVC board whose turn just
         // became the computer's is picked up here and nowhere else.
         PvcController.maybeSchedule(level, pos, session);
-        String fen = session.getChessData().toFen();
+        BoardVariant v = session.getVariant();
+        String fen = v.toFen(session.getBoardState());
         int sdPlayer = session.getSdPlayer();
         int stateOrd = session.getState().ordinal();
         int selectPoint = session.getSelectPoint();
@@ -99,12 +100,13 @@ public final class GameBroadcaster {
         sendToAll(level, session, ModNetwork.CHESS_SYNC, buf -> {
             buf.writeBlockPos(pos);
             buf.writeUtf(fen);
+            buf.writeUtf(v.id());
             buf.writeByte(sdPlayer);
             buf.writeByte(stateOrd);
             buf.writeShort(selectPoint);
             buf.writeBoolean(legalDests != null);
             if (legalDests != null) {
-                LegalDestsBitmap.write(buf, legalDests);
+                LegalDestsBitmap.write(buf, legalDests, v.totalSquares());
             }
             buf.writeShort(lastSrc);
             buf.writeShort(lastDst);
@@ -112,28 +114,31 @@ public final class GameBroadcaster {
     }
 
     /**
-     * Compute the 256-square bitmap of legal destinations for the currently
-     * selected piece, when that piece belongs to the side to move. Returns
-     * {@code null} in every other case (no selection, off-board, opponent's
-     * piece, finished game) so the client falls back to its own cached compute.
+     * Compute the legal-destinations bitmap for the currently selected piece,
+     * when that piece belongs to the side to move. Returns {@code null} in
+     * every other case (no selection, off-board, opponent's piece, finished
+     * game) so the client falls back to its own cached compute.
      *
      * <p>The bitmap is per-FEN, not per-recipient: both players and every
      * spectator can see the same dots, so it ships to everyone in the room.
+     *
+     * <p>The bitmap length is variant-dependent (xiangqi = 256 squares,
+     * international chess = 64). The variant owns the loop bounds.
      */
     private static boolean[] computeLegalDestsForSelection(GameSession session) {
+        BoardVariant v = session.getVariant();
+        BoardState bs = session.getBoardState();
         int sdPlayer = session.getSdPlayer();
         if (session.getState() == GameState.FINISHED) return null;
         int selectedSq = session.getSelectPoint();
         if (selectedSq < 0) return null;
-        Position pos = session.getChessData();
-        if (!ChineseChessEngine.isSquare(selectedSq)) return null;
-        byte piece = pos.squares[selectedSq];
+        if (!v.isValidSquare(selectedSq)) return null;
+        byte piece = v.pieceAt(bs, selectedSq);
         if (piece == 0) return null;
-        int tag = Position.SIDE_TAG(sdPlayer);
-        if ((piece & tag) == 0) return null;
-        boolean[] dests = new boolean[256];
-        for (int dst = 0; dst < 256; dst++) {
-            if (dst != selectedSq && ChineseChessEngine.canMove(pos, selectedSq, dst)) {
+        if (v.sideOfPiece(bs, selectedSq) != sdPlayer) return null;
+        boolean[] dests = new boolean[v.totalSquares()];
+        for (int dst = 0; dst < v.totalSquares(); dst++) {
+            if (dst != selectedSq && v.canMove(bs, selectedSq, dst)) {
                 dests[dst] = true;
             }
         }
@@ -142,7 +147,8 @@ public final class GameBroadcaster {
 
     public static void sendOpenScreen(ServerPlayer player, GameSession session, BlockPos pos) {
         if (session == null || player == null) return;
-        String fen = session.getChessData().toFen();
+        BoardVariant v = session.getVariant();
+        String fen = v.toFen(session.getBoardState());
         int sdPlayer = session.getSdPlayer();
         int stateOrd = session.getState().ordinal();
         int selectPoint = session.getSelectPoint();
@@ -162,13 +168,14 @@ public final class GameBroadcaster {
             buf.writeBlockPos(pos);
             buf.writeUUID(self);
             buf.writeUtf(fen);
+            buf.writeUtf(v.id());
             buf.writeByte(sdPlayer);
             buf.writeByte(stateOrd);
             buf.writeShort(selectPoint);
             buf.writeByte(role);
             buf.writeBoolean(legalDests != null);
             if (legalDests != null) {
-                LegalDestsBitmap.write(buf, legalDests);
+                LegalDestsBitmap.write(buf, legalDests, v.totalSquares());
             }
             buf.writeShort(lastSrc);
             buf.writeShort(lastDst);

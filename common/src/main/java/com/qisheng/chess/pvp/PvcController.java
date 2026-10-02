@@ -1,7 +1,9 @@
 package com.qisheng.chess.pvp;
 
-import com.qisheng.chess.engine.ChineseChessEngine;
-import com.qisheng.chess.engine.xqwlight.Position;
+import com.qisheng.chess.engine.BoardRegistry;
+import com.qisheng.chess.engine.BoardState;
+import com.qisheng.chess.engine.BoardVariant;
+import com.qisheng.chess.engine.Move;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -31,13 +33,19 @@ import java.util.concurrent.RejectedExecutionException;
  *   <li>The search itself runs on a <b>worker thread</b>, not on the tick
  *       thread — a few hundred milliseconds of search inside a packet handler
  *       would be a server freeze. Only the FEN crosses that boundary; the
- *       search parses it onto a private board
- *       ({@link ChineseChessEngine#searchBestMove}).</li>
+ *       search parses it onto a private board owned by the variant.</li>
  *   <li>The result comes back through {@code MinecraftServer#execute}, and
  *       everything is re-derived there: the level, the session, and whether it
  *       is still the computer's turn. A human who resigned, disconnected, or
  *       was reset in the meantime simply makes the reply a no-op.</li>
  * </ol>
+ *
+ * <h2>Variant-aware (v0.3.1)</h2>
+ * The board may now be xiangqi <em>or</em> international. Both flow through the
+ * same scheduler; the variant decides what move encoding and what engine to use.
+ * International chess has no alpha-beta engine yet ({@code searchBestMove} is
+ * a thin wrapper over {@code firstLegalMove}) but the surrounding plumbing is
+ * identical.
  *
  * <h2>Why the reply is delayed</h2>
  * The search usually finishes in well under {@link #MIN_REPLY_DELAY_MILLIS}, so
@@ -113,12 +121,14 @@ public final class PvcController {
             return;
         }
 
-        // Only the position crosses the thread boundary. Everything else — the
-        // level, the session, whose turn it is — is re-derived on the tick
-        // thread when the answer comes back.
-        String fen = session.getChessData().toFen();
+        // Only the FEN crosses the thread boundary. Everything else — the
+        // level, the session, whose turn it is, the variant — is re-derived
+        // on the tick thread when the answer comes back.
+        BoardVariant variant = BoardRegistry.getByIdOrDefault(session.getVariantId());
+        BoardState state = session.getBoardState();
+        String fen = variant.toFen(state);
         try {
-            WORKER.execute(() -> searchThenPlay(server, key, fen));
+            WORKER.execute(() -> searchThenPlay(server, key, fen, session.getVariantId()));
         } catch (RejectedExecutionException e) {
             IN_FLIGHT.remove(key);
             LOG.warn("[qisheng] 棋局引擎线程已关闭,跳过 {} 的电脑着法。", key.describe());
@@ -126,23 +136,24 @@ public final class PvcController {
     }
 
     /** Worker thread: search, hold the reply back to a human pace, hand off to the server. */
-    private static void searchThenPlay(MinecraftServer server, BoardKey key, String fen) {
+    private static void searchThenPlay(MinecraftServer server, BoardKey key, String fen, String variantId) {
+        BoardVariant variant = BoardRegistry.getByIdOrDefault(variantId);
         long start = System.nanoTime();
-        int mv = 0;
+        Move move = Move.NONE;
         try {
-            mv = ChineseChessEngine.searchBestMove(fen, ChineseChessEngine.SEARCH_MAX_DEPTH, THINK_MILLIS);
+            move = variant.searchBestMove(fen, /*depth=*/19, THINK_MILLIS);
         } catch (RuntimeException e) {
             // An engine crash must not kill the worker thread: the next board
             // still needs it. The fallback below keeps this board playable.
             LOG.error("[qisheng] 电脑搜索在 {} 处抛出异常:{}", key.describe(), e.toString(), e);
         }
-        if (mv <= 0) {
+        if (move.src() < 0 || move.dst() < 0) {
             LOG.warn("[qisheng] 引擎在 {} 处没有给出着法,回退到第一个合法着法。", key.describe());
             try {
-                mv = ChineseChessEngine.firstLegalMove(fen);
+                move = variant.firstLegalMove(fen);
             } catch (RuntimeException e) {
                 LOG.error("[qisheng] 兜底着法在 {} 处抛出异常:{}", key.describe(), e.toString(), e);
-                mv = 0;
+                move = Move.NONE;
             }
         }
 
@@ -156,9 +167,9 @@ public final class PvcController {
             }
         }
 
-        int move = mv;
+        Move finalMove = move;
         try {
-            server.execute(() -> play(server, key, move));
+            server.execute(() -> play(server, key, finalMove, variantId));
         } catch (RuntimeException e) {
             IN_FLIGHT.remove(key);
             LOG.warn("[qisheng] 无法把电脑着法交回主线程({})。", key.describe(), e);
@@ -166,7 +177,7 @@ public final class PvcController {
     }
 
     /** Tick thread: apply the move if it is still the computer's turn. */
-    private static void play(MinecraftServer server, BoardKey key, int mv) {
+    private static void play(MinecraftServer server, BoardKey key, Move move, String variantId) {
         try {
             IN_FLIGHT.remove(key);
 
@@ -177,16 +188,28 @@ public final class PvcController {
             // PVP, or been reset while the search was running.
             if (!session.isComputerToMove()) return;
 
+            // The variant may have changed mid-search (e.g. setMode); use the
+            // session's current variant, not the one captured when the search
+            // started.
+            BoardVariant currentVariant = BoardRegistry.getByIdOrDefault(session.getVariantId());
+            if (!session.getVariantId().equals(variantId)) {
+                // Variant flip: this board now plays a different game, and the
+                // move we searched for may no longer make sense. Just re-broadcast
+                // the new state and let the next turn pick the right engine.
+                GameBroadcaster.broadcastSync(level, session, key.pos());
+                return;
+            }
+
             BlockPos pos = key.pos();
-            GameLogic.MoveOutcome out = apply(session, mv);
+            GameLogic.MoveOutcome out = apply(session, move);
             if (out != GameLogic.MoveOutcome.OK) {
                 // The engine handed back something this board rejects. Play the
                 // weakest legal move instead of leaving the game waiting on a
                 // turn nobody will take.
-                int fallback = ChineseChessEngine.firstLegalMove(session.getChessData().toFen());
-                if (fallback > 0) {
+                Move fallback = currentVariant.firstLegalMove(currentVariant.toFen(session.getBoardState()));
+                if (fallback.src() >= 0) {
                     LOG.warn("[qisheng] 电脑着法 {} 在 {} 处被拒绝({}),改用兜底着法 {}。",
-                            mv, key.describe(), out, fallback);
+                            describe(move), key.describe(), out, describe(fallback));
                     out = apply(session, fallback);
                 }
             }
@@ -217,8 +240,13 @@ public final class PvcController {
         }
     }
 
-    private static GameLogic.MoveOutcome apply(GameSession session, int mv) {
-        if (mv <= 0) return GameLogic.MoveOutcome.ILLEGAL_MOVE;
-        return GameLogic.tryEngineMove(session, Position.SRC(mv), Position.DST(mv));
+    private static GameLogic.MoveOutcome apply(GameSession session, Move move) {
+        if (move.src() < 0 || move.dst() < 0) return GameLogic.MoveOutcome.ILLEGAL_MOVE;
+        return GameLogic.tryEngineMove(session, move.src(), move.dst());
+    }
+
+    private static String describe(Move move) {
+        if (move.src() < 0 || move.dst() < 0) return "NONE";
+        return move.src() + "→" + move.dst();
     }
 }

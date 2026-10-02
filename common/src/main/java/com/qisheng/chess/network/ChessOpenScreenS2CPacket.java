@@ -38,12 +38,15 @@ public class ChessOpenScreenS2CPacket {
         BlockPos pos = buf.readBlockPos();
         UUID self = buf.readUUID();
         String fen = buf.readUtf();
+        String variantId = buf.readUtf();
         int sdPlayer = buf.readByte();
         int stateOrd = buf.readByte();
         int selectPoint = buf.readShort();
         int myRole = buf.readByte();   // -1=spec, 0=red, 1=black
         boolean hasDests = buf.readBoolean();
-        boolean[] legalDests = hasDests ? LegalDestsBitmap.read(buf) : null;
+        boolean[] legalDests = hasDests
+                ? LegalDestsBitmap.read(buf, totalSquaresFor(variantId))
+                : null;
         int lastSrc = buf.readShort();
         int lastDst = buf.readShort();
         boolean flipped = buf.readBoolean();
@@ -55,7 +58,16 @@ public class ChessOpenScreenS2CPacket {
         // send() enqueue to the render-thread task queue; execute() is the
         // post-1.19.4 preferred name (send() is an alias).
         mc.execute(() -> mc.setScreen(
-                new CChessBoardScreen(pos, self, fen, sdPlayer, stateOrd, selectPoint, myRole,
+                new CChessBoardScreen(pos, self, fen, variantId, sdPlayer, stateOrd, selectPoint, myRole,
                         legalDests, lastSrc, lastDst, flipped)));
+    }
+
+    private static int totalSquaresFor(String variantId) {
+        if (variantId == null) return 256;
+        return switch (variantId) {
+            case "xiangqi" -> 256;
+            case "international" -> 64;
+            default -> 256;
+        };
     }
 }

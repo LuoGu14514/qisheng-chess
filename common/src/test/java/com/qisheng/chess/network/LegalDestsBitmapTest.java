@@ -33,7 +33,7 @@ class LegalDestsBitmapTest {
         boolean[] in = new boolean[256];
         FriendlyByteBuf buf = buf();
         LegalDestsBitmap.write(buf, in);
-        assertEquals(LegalDestsBitmap.WIRE_SIZE, buf.readableBytes(),
+        assertEquals(LegalDestsBitmap.XIANGQI_WIRE_SIZE, buf.readableBytes(),
                 "wire size is 32 bytes for 256 bits");
         boolean[] read = LegalDestsBitmap.read(buf);
         assertArrayEquals(in, read);

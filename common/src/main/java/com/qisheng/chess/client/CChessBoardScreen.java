@@ -96,6 +96,13 @@ public class CChessBoardScreen extends Screen {
     private final int myRole;
     private final boolean viewerIsBlack;
     /**
+     * Variant id from {@code BoardRegistry}. Default {@code "xiangqi"}. When
+     * {@code "international"}, the GUI shows a "GUI 待 v0.3.2" placeholder
+     * instead of the 9x10 xiangqi board (only the server-side engine and
+     * session state are implemented in v0.3.1).
+     */
+    private String variantId = "xiangqi";
+    /**
      * XOR of {@link #viewerIsBlack} (role-based: red player sees red at the
      * bottom, black player the reverse) and the board-block's facing flip
      * (a south-facing board is mounted with its back to a north wall and is
@@ -207,10 +214,20 @@ public class CChessBoardScreen extends Screen {
                              int selectPoint, int myRole, boolean[] legalDests,
                              int lastMoveSrc, int lastMoveDst,
                              boolean flipped) {
+        this(boardPos, selfId, fen, "xiangqi", sdPlayer, stateOrd, selectPoint, myRole,
+                legalDests, lastMoveSrc, lastMoveDst, flipped);
+    }
+
+    public CChessBoardScreen(BlockPos boardPos, UUID selfId,
+                             String fen, String variantId, int sdPlayer, int stateOrd,
+                             int selectPoint, int myRole, boolean[] legalDests,
+                             int lastMoveSrc, int lastMoveDst,
+                             boolean flipped) {
         super(Component.translatable("qisheng.chess.screen.title"));
         this.boardPos = boardPos;
         this.selfId = selfId;
         if (fen != null) this.fen = fen;
+        this.variantId = (variantId == null || variantId.isEmpty()) ? "xiangqi" : variantId;
         this.sdPlayer = sdPlayer;
         this.stateOrd = stateOrd;
         this.selectedSq = selectPoint;
@@ -254,7 +271,14 @@ public class CChessBoardScreen extends Screen {
 
     public void applySync(String fen, int sdPlayer, int stateOrd, int selectPoint,
                           boolean[] legalDests, int lastMoveSrc, int lastMoveDest) {
+        applySync(fen, sdPlayer, stateOrd, selectPoint, legalDests, lastMoveSrc, lastMoveDest, this.variantId);
+    }
+
+    public void applySync(String fen, int sdPlayer, int stateOrd, int selectPoint,
+                          boolean[] legalDests, int lastMoveSrc, int lastMoveDest,
+                          String variantId) {
         if (fen != null) this.fen = fen;
+        if (variantId != null && !variantId.isEmpty()) this.variantId = variantId;
         this.sdPlayer = sdPlayer;
         this.stateOrd = stateOrd;
         this.selectedSq = selectPoint;
@@ -649,21 +673,26 @@ public class CChessBoardScreen extends Screen {
 
         Position pos = position();
 
-        drawFrame(gfx);
-        drawGrid(gfx);
-        drawRiver(gfx);
-        drawPalace(gfx);
-        // Last-move overlay goes under the pieces / selection / legal-dot
-        // stack so the highlighted squares don't visually compete with the
-        // current selection ring.
-        drawLastMoveOverlay(gfx);
-        if (pos != null) {
-            drawPieces(gfx, pos);
-            // 是否在盘上统一用门面判断：selectedSq 来自网络包，越界时
-            // pos.squares[selectedSq] 会直接抛数组越界。
-            if (ChineseChessEngine.isSquare(selectedSq) && pos.squares[selectedSq] != 0) {
-                drawSelection(gfx, selectedSq);
-                drawLegalDots(gfx, pos, selectedSq);
+        if ("international".equals(this.variantId)) {
+            drawFrame(gfx);
+            drawInternationalPlaceholder(gfx);
+        } else {
+            drawFrame(gfx);
+            drawGrid(gfx);
+            drawRiver(gfx);
+            drawPalace(gfx);
+            // Last-move overlay goes under the pieces / selection / legal-dot
+            // stack so the highlighted squares don't visually compete with the
+            // current selection ring.
+            drawLastMoveOverlay(gfx);
+            if (pos != null) {
+                drawPieces(gfx, pos);
+                // 是否在盘上统一用门面判断：selectedSq 来自网络包，越界时
+                // pos.squares[selectedSq] 会直接抛数组越界。
+                if (ChineseChessEngine.isSquare(selectedSq) && pos.squares[selectedSq] != 0) {
+                    drawSelection(gfx, selectedSq);
+                    drawLegalDots(gfx, pos, selectedSq);
+                }
             }
         }
         drawTitle(gfx);
@@ -679,6 +708,21 @@ public class CChessBoardScreen extends Screen {
         int popupTop = actionBottom > 0 ? actionBottom + 4 : PopupOverlay.DEFAULT_TOP;
         popups.render(gfx, this.width, popupTop);
         actionPopup.render(gfx, this.width);
+    }
+
+    /**
+     * Centered "国际象棋 GUI 待 v0.3.2" placeholder for the international variant.
+     * v0.3.1 ships the engine + session state but does not yet render the
+     * 8x8 board, so this screen is the only GUI signal the player gets that
+     * the server is actually running a chess game.
+     */
+    private void drawInternationalPlaceholder(GuiGraphics gfx) {
+        Component line1 = Component.translatable("qisheng.chess.screen.variant.international.placeholder.line1");
+        Component line2 = Component.translatable("qisheng.chess.screen.variant.international.placeholder.line2");
+        int cx = boardX + boardW / 2;
+        int cy = boardY + boardH / 2;
+        gfx.drawCenteredString(this.font, line1, cx, cy - 10, COL_TEXT_PRIMARY);
+        gfx.drawCenteredString(this.font, line2, cx, cy + 10, COL_TEXT_MUTED);
     }
 
     @Override

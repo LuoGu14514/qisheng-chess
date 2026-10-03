@@ -1,7 +1,7 @@
 # 启升棋 qisheng-chess
 
 Minecraft 1.20.1 的**棋类 PVP 模组**(Fabric)。放下一张棋盘方块,右键坐下,
-两个人就在游戏里下一局真正的棋 —— v0.4.0 同时支持**五种棋**:
+两个人就在游戏里下一局真正的棋 —— v0.4.1 同时支持**五种棋**:
 
 - **中国象棋**(默认)— 红先、将死判负、自然限着与重复局面判和
 - **国际象棋**(FIDE 完整规则:王车易位 / 吃过路兵 / 升变 / 50 步和棋)
@@ -13,7 +13,7 @@ Minecraft 1.20.1 的**棋类 PVP 模组**(Fabric)。放下一张棋盘方块,右
 
 - 模组 ID:`qisheng_chess`
 - 方块:`qisheng_chess:cchess`(中国象棋)/ `qisheng_chess:gomoku`(五子棋)/ `qisheng_chess:go`(围棋)
-- 当前版本:`0.4.0`
+- 当前版本:`0.4.1`
 - 平台:**仅 Fabric**。NeoForge 模块已于 v0.1.2 移除(它此前处于半删除状态,源码语法都不完整)。
 
 ---
@@ -161,8 +161,12 @@ qisheng-chess/
 - **对局快照有丢失窗口**:棋盘状态在每次状态变化时标脏,随区块存档落盘;
   若在区块被保存前进程被杀,最近若干步可能丢失。
 - **PVC 的电脑执固定颜色,不可换**:`BoardMode.PVC` 下人类永远执红;`/qisheng takeover`
-  与 `swapRoles` 都会拒绝(PVC 棋盘就是单人 vs 引擎)。**v0.4.0 仅给中国象棋 PVC 实现了引擎**(xqwlight GPL-2.0);
-  五子棋 / 围棋 / 国际象棋的 PVC 当前直接 `firstLegalMove` 兜底,真要下出水平得等后续版本。
+  与 `swapRoles` 都会拒绝(PVC 棋盘就是单人 vs 引擎)。**v0.4.1 各棋类 AI 现状**:
+  - 中国象棋 → 真正的 alpha-beta (xqwlight GPL-2.0,600 ms / 手,迭代深化至深度 19)
+  - 国际象棋 → 1-ply MVV-LVA + 中央偏好 (80 ms / 手,只能挡住无脑送子)
+  - 五子棋 → 1-ply 攻防 AI (WIN/BLOCK/OPEN4/CLOSED4/OPEN3 优先级,80 ms / 手)
+  - 围棋 → 1-ply capture-or-extend (贪 capture + 临接 + 中心,80 ms / 手;围棋还有 Pass 按钮)
+  各变种独立时间预算,象棋最慢,其他三个快出 8 倍。
 - **界面只做了 `zh_cn` 与 `en_us` 两种语言**。
 - **GUI 仍缺走子动画**（最近一步高亮与走子音效已于 v0.2.1 落地）。
 

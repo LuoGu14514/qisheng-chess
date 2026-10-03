@@ -683,3 +683,79 @@ BUILD SUCCESSFUL 23s (4 executed, 8 up-to-date)
 - **服务端没有实机验证**：容器无 LWJGL Display + 无 EULA TTY —— 五子棋 / 围棋实际表现以实机为准。
 - **国际象棋 GUI 仍占位提示**（v0.3.1 仍未决）：完整 64 格 + 升变选择器 / 走法预览留待 v0.4.2 + v0.5.0。
 
+---
+
+## 11. v0.4.1 — AI 优化 + GUI 补全 + 国际象棋规则补齐（执行记录）
+
+启动时间：2026-10-03。完成时间：2026-10-03。提交：`1884fa8 v0.4.1: AI 优化 + GUI 补全 + 三连和棋/子力不足 + i18n`。
+
+### 11.1 用户意图（m04592, 2026-10-03 摘要）
+
+- "先提交到git,随后审查代码情况,审查结束后继续补充"
+- "该模组的宗旨是简单易用,无复杂功能,但是基础功能要全"
+- "我认为优化gui,pvcai优化等是可以允许的,但是锦标赛等是毫无必要的"
+
+允许：GUI 优化 + PVC AI 优化 + 基础功能补齐。不做：锦标赛等复杂功能。
+
+### 11.2 并行审查
+
+三路 subagent 并发完成代码审查：
+
+1. **GUI / 客户端 review**（96c41adf, m04674）：
+   - Critical：C1 lastMoveSrc/Dst 校验（ChineseChessEngine.isSquare 只认 256 编码导致国际/五子棋/围棋 lastMove 永远 -1 → overlay + 走子音效不触发）；C2 title bar 不显示变种名
+   - Major：M1 select 分支重复 arm 一次 sendInteract；M3 国际 GUI 占位 → 真渲染；M4 围棋 pass 按钮
+   - Minor/Nit：9 + 6 条
+2. **PVC AI / 引擎 review**（4def66d1, m04680+m04674）：
+   - HIGH：gomoku/go/international 的 firstLegalMove 太弱
+   - 6 个修复类别约 180 行
+3. **代码质量 review**（c19ad246, m04753+m04759）：
+   - Critical：围棋 pass 按钮（与 M4 重叠）
+   - Major：国际三次重复和棋、子力不足和棋、18 处硬编码中文、draw-rules 多态、长打判负
+   - Minor：logging/caching/ThreadLocal/删 stale doc
+
+收敛后的优先级：P0 = 国际 GUI + 围棋 pass + 五子棋 1-ply AI；P1 = 国际 MVV-LVA + 围棋 capture AI + GUI 中文 i18n；P2 = 不做（锦标赛、alpha-beta、MCTS）。
+
+### 11.3 改动表
+
+| 文件 | 性质 | 主要变化 |
+|---|---|---|
+| `client/CChessBoardScreen.java` | M | 加 `drawInternationalBoard/Piece` + 改 4 处 lastMove 校验为 variant-aware + title bar 4 槽 + drawLegalDots 重载 + 删重复 sendInteract + Pass 按钮 + `ACTION_PASS = 3` 私有常量 + `onClickPass` + `maxButtons` 7→8 |
+| `engine/go/GoVariant.java` | M | `placementPriority` + `countGroupLiberties` + `groupSize` flood-fill + `(-1,-1)` pass sentinel 路由到 `applyPass` |
+| `engine/gomoku/GomokuVariant.java` | M | `placementPriority` + `patternScore` + 6 buckets WIN_OWN/WIN_BLOCK/OPEN4_OWN/OPEN4_BLOCK/CLOSED4_OWN/OPEN3_OWN/CLOSED3_OWN/OPEN2_OWN |
+| `engine/international/IntChessBoard.java` | M | 加 `positionKey` + `positionHistory` |
+| `engine/international/InternationalChessVariant.java` | M | `PIECE_VALUES` + `moveScore` (MVV-LVA) + `positionKey` 指纹 + `insufficientMaterial` + 三次重复检测 |
+| `network/ChessInteractC2SPacket.java` | M | `ACTION_PASS = 3` + `handlePass` |
+| `network/ChessResignC2SPacket.java` | M | 硬编码中文 → `Component.translatable` |
+| `pvp/BoardMessages.java` | M | 硬编码中文 → `Component.translatable` |
+| `pvp/GameLogic.java` | M | `tryPass(session, playerId)` |
+| `pvp/PvcController.java` | M | `thinkMillisFor` + `replyDelayFor` (xiangqi=600/400ms, 其他=80/120ms) |
+| `lang/zh_cn.json` + `en_us.json` | M | 6 lang key 对（turn.label / your_move / waiting / spectating / resign.winner_announce 等） |
+| `engine/go/GoVariantTest.java` | M | 22 条（删 searchBestMoveIsFirstLegal，改 searchBestMovePrefersCentreOnEmptyBoard + 新增 aiTakesObviousCapture） |
+| `engine/gomoku/GomokuVariantTest.java` | M | 20 条（删 searchBestMoveIsFirstLegal，改 searchBestMoveOnEmptyBoard + 新增 aiTakesWinningFour） |
+| `engine/international/InternationalChessVariantTest.java` | M | 18 条（新增 threefoldRepetition + 4 insufficientMaterial + aiPrefersCaptureOverQuietMove） |
+| `docs/ai-engine-audit.md` | A | 保存并行审查报告 |
+
+合计 16 files changed, 1060 insertions(+), 51 deletions(-)。
+
+### 11.4 关键设计决策
+
+- **per-variant 时间预算而非全局**：象棋是真搜索（要 600 ms 才出有意义的着），其他三个是 1-ply 启发式（80 ms 已经跑几百次），不能让用户等 7 倍时间下一颗围棋。
+- **围棋 pass 用 `Move(-1, -1)` sentinel**：其他变种 canMove 自然 reject `-1`，不需要在协议层区分。
+- **AI 是 1-ply 启发式**而非 alpha-beta：用户明确"无复杂功能"，1-ply 已经能从"开局送子"提升到"挡住无脑攻击"。
+- **BoardMessages 用 translatable 而不是 literal**：但 lang key 跟主体颜色绑定（"qisheng.chess.role.red"），五子棋 / 围棋也是黑先，不是真"红黑"——这个语义错误先保留，等 GUI 显示玩家名字替代"红/黑"时再改。
+
+### 11.5 仍存留（v0.4.2 路线）
+
+- 五子棋 / 围棋 GUI 仍无坐标引导（用户没要求）
+- 围棋无 superko（用户没要求）
+- 国际象棋 AI 1-ply 无 alpha-beta（用户接受"无复杂功能"）
+- 走子动画（用户没要求）
+- 服务端没有实机验证（容器限制）
+
+### 11.6 测试
+
+全部 **128 tests passed, 0 failures**：
+ChineseChessEngineTest 8 + GomokuVariantTest 20 + GoVariantTest 22 + InternationalChessVariantTest 18 + XiangqiVariantTest 10 + PositionTest 11 + SearchTimeBudgetTest 5 + LegalDestsBitmapTest 6 + GameSessionPersistenceTest 13 + PvcGameLoopTest 15。
+
+jar = `qisheng_chess-fabric-0.4.1.jar` = 246374 B（vs 0.4.0 = 239416 B，+6958 B = ~3%，符合预期）。
+

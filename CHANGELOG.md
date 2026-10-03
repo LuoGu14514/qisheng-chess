@@ -5,6 +5,66 @@
 
 ---
 
+## [0.4.1] — AI 优化 + GUI 补全 + 国际象棋规则补齐
+
+目标：落实 v0.4 之后的代码审查结论（用户优先级 = GUI 优化 + PVC AI 优化 + 基础功能补齐；不做锦标赛等复杂功能）。重点：国际象棋 GUI 从占位变为真实渲染、围棋 Pass 按钮、三连重复 + 子力不足和棋、per-variant AI 强化、i18n 收尾。
+
+### 变更
+
+#### GUI 补全
+
+- **国际象棋完整 8×8 渲染**：新增 `drawInternationalBoard(gfx, bs)` 与 `drawInternationalPiece(gfx, cx, cy, r, pc, v, sq, bs)`；浅盘白子 + 深字、黑盘白字；a-h / 1-8 坐标标签；字母从 `v.pieceFenChar(bs, sq)` 读取。`render()` 把 `drawInternationalPlaceholder(gfx)` 换成 `drawInternationalBoard(gfx, bs)`。新增常量 `COL_INT_LIGHT=0xFFEFE2C8` / `COL_INT_DARK=0xFF8E6A4A`。
+- **title bar 变种名**：`qisheng.chess.screen.title_bar` 从 3 槽升级为 4 槽（变种 + 模式 + 角色 + 状态）；`CChessBoardScreen` 渲染标题时新增 `Component.translatable(variant().displayNameKey()).getString()`。
+- **lastMove 校验变种感知**：`CChessBoardScreen` 内 4 处把 `ChineseChessEngine.isSquare(...)` 改为 `variant().isValidSquare(...) + v.fileOf/rankOf`（line 262-263、312-313、775、1146）。覆盖范围从仅象棋扩展到国际 / 五子棋 / 围棋，last-move 高亮 + 走子音效在所有变种下都会触发。
+- **drawLegalDots 变种感知重载**：新增 `drawLegalDots(GuiGraphics, BoardState, int)` 用 `v.indexForFileRank + v.pieceAt`；原 `drawLegalDots(GuiGraphics, Position, int)` 内部也改走 variant 路径。
+- **去重 select 分支**：`mouseClicked` 里原来重复 arm 两次 `sendInteract(ACTION_SELECT, ...)`，现在只发一次。
+- **围棋 Pass 按钮**：新增 `ACTION_PASS = 3` 私有常量 + `onClickPass()` + 仅当 `isGo()` 时显示的按钮（`maxButtons` 7 → 8）；服务端走 `ChessInteractC2SPacket.handlePass` → `GameLogic.tryPass` → `GoVariant.canMove(-1,-1)` → `GoVariant.applyMove(-1,-1)`。
+
+#### 国际象棋规则补齐
+
+- **三次重复和棋**：`IntChessBoard` 新增 `long positionKey` + `ArrayList<Long> positionHistory`，`makeMove` 末尾追加新 key；`InternationalChessVariant.positionKey(b)` 是 Zobrist-free 指纹（h *= 31 + 每字节 + sdPlayer + castling + enPassantSq+1）；`isStalemate` 在 `positionHistory.size() >= 3` 时检查当前 key 是否出现 ≥3 次。
+- **子力不足和棋**：`InternationalChessVariant.insufficientMaterial(b)`：K vs K / K + 任一 minor vs K / K+B vs K+B 同色格象 = draw；其他情况不 draw。判定算法：白/黑 piece count + bishop colour square 分类（light = (file + rank) even）。
+
+#### PVC AI 强化
+
+- **五子棋 1-ply 攻防 AI**：`GomokuVariant.searchBestMove` 走 `placementPriority` 优先级：WIN_OWN=100000 / WIN_BLOCK=90000 / OPEN4_OWN=8000 / OPEN4_BLOCK=7000 / CLOSED4_OWN=500 / OPEN3_OWN=400 / CLOSED3_OWN=50 / OPEN2_OWN=10。新增 `patternScore(b, sq, stone)` 4 方向 H/V/diag1/diag2 综合评分。
+- **国际象棋 1-ply MVV-LVA AI**：`InternationalChessVariant.searchBestMove` 走 `moveScore(b, src, dst)` 评分（MVV-LVA = victim value - attacker value/10 + 中央偏好 6-distance）。新增 `PIECE_VALUES = {0, 1, 3, 3, 5, 9, 0}`。
+- **围棋 1-ply capture-or-extend AI**：`GoVariant.searchBestMove` 走 `placementPriority` 分层：captures×100 + ownAdjacency×30 + oppAdjacency×20 + centre×0 - ownEye×50。新增 `countGroupLiberties` + `groupSize` flood-fill helpers。
+- **per-variant 时间预算**：`PvcController` 新增 `thinkMillisFor(variant)` (xiangqi=600ms, 其他=80ms) + `replyDelayFor(variant)` (xiangqi=400ms, 其他=120ms)；`searchThenPlay` 改调 `thinkMillisFor(variant)`，sleep 用 `replyDelay - elapsedMillis`。
+- **围棋 pass sentinel**：Go 变种用 `Move(-1, -1)` 表示 pass；`GoVariant.canMove` 优先检查 `src==-1 && dst==-1`，`applyMove` 路由到 `applyPass(state)`；其他变种 `canMove` 自然 reject。
+
+#### i18n 收尾
+
+- **BoardMessages.java**：把 `"红方/黑方"` / `"轮到"` / `"你走子"` / `"旁观"` / `"等待"` 全部换成 `Component.translatable`。
+- **ChessResignC2SPacket.java**：把 `" 认输 — 红方胜/黑方胜"` 字面量换成 `Component.translatable("qisheng.chess.resign.winner_announce", playerName, winner)`。
+- **新增 lang keys**（zh_cn + en_us 各 6 对）：
+  - `qisheng.chess.turn.label` = "轮到 %s" / "Turn: %s"
+  - `qisheng.chess.turn.your_move` = "← 你走子" / "← your move"
+  - `qisheng.chess.turn.waiting` = "(等待;%s走子)" / "(waiting; %s to move)"
+  - `qisheng.chess.turn.spectating` = "(旁观;%s走子)" / "(spectating; %s to move)"
+  - `qisheng.chess.resign.winner_announce` = "%s 认输 — %s" / "%s resigned — %s"
+  - `qisheng.chess.game.over.{red_win,black_win}` 复用既有 "红方胜!"/"黑方胜!"。
+
+### 测试
+
+- `engine/gomoku/GomokuVariantTest` 19 → 20：删除 `searchBestMoveIsFirstLegal`，改 `searchBestMoveOnEmptyBoard(assertEquals 0)` + 新增 `aiTakesWinningFour`(4 子开四,AI 必下中间完成五连)。
+- `engine/go/GoVariantTest` 21 → 22：删除 `searchBestMoveIsFirstLegal`，改 `searchBestMovePrefersCentreOnEmptyBoard(assertEquals 40)` + 新增 `aiTakesObviousCapture`(白子被打,AI 必提子)。
+- `engine/international/InternationalChessVariantTest` 13 → 18：新增 `threefoldRepetitionIsDraw`(Ng1-f3 × 16 步循环) + `insufficientMaterialBareKings` / `insufficientMaterialKnightOrBishopVsKing` / `insufficientMaterialSameColourBishops`(a1 + b8 同色格) + `insufficientMaterialNotOppositeColourBishops`(a1 + h7 异色格,不是 draw) + `aiPrefersCaptureOverQuietMove`(黑 N 必须 Nxd5 而不是 Nb5)。
+- 全部 **128 tests passed, 0 failures**（ChineseChessEngineTest 8 + GomokuVariantTest 20 + GoVariantTest 22 + InternationalChessVariantTest 18 + XiangqiVariantTest 10 + PositionTest 11 + SearchTimeBudgetTest 5 + LegalDestsBitmapTest 6 + GameSessionPersistenceTest 13 + PvcGameLoopTest 15）。
+
+### 文档
+
+- `docs/ai-engine-audit.md`: 保存并行代码审查（PVC AI 引擎）报告作为参考。
+
+### 已知限制
+
+- 国际象棋 AI 仍是 1-ply MVV-LVA，没有 alpha-beta；棋力只能挡住无脑送子。
+- 五子棋 AI 是 1-ply 攻防模式；不读长链 / 不算双三 / 不算禁手（Renju 规则未启用）。
+- 围棋 AI 只贪 capture + 临接 + 中心；不会读真眼 / 不会打劫判断。
+- 服务端没有实机验证（容器无 LWJGL Display + 无 EULA TTY）。
+
+---
+
 ## [0.4.0] — 五子棋 + 围棋 + 独立方块
 
 目标：在 v0.3.1 引擎抽象之上引入两类新棋（五子棋 15×15、围棋 9 路 / 19 路），并为每个棋类提供独立方块。游戏逻辑完全 variant-aware；GUI 提供功能性的简化渲染（无 AI、无高亮、无坐标引导）。

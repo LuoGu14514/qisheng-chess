@@ -65,6 +65,27 @@ public final class PvcController {
     /** Wall-clock floor between the human's move and the computer's reply. */
     private static final long MIN_REPLY_DELAY_MILLIS = 400L;
 
+    /** Wall-clock floor for fast variants (gomoku / go / international). */
+    private static final long FAST_REPLY_DELAY_MILLIS = 120L;
+
+    /**
+     * Per-variant think budget. Xiangqi really uses the full 600 ms; the
+     * other variants resolve in <1 ms so we hand them a tighter cap to
+     * keep the worker snappy.
+     */
+    private static int thinkMillisFor(BoardVariant variant) {
+        return "xiangqi".equals(variant.id()) ? THINK_MILLIS : 80;
+    }
+
+    /**
+     * Per-variant reply delay. Xiangqi feels right with 400 ms; trivial
+     * games finish so fast that 400 ms feels sluggish, so we shrink the
+     * floor.
+     */
+    private static long replyDelayFor(BoardVariant variant) {
+        return "xiangqi".equals(variant.id()) ? MIN_REPLY_DELAY_MILLIS : FAST_REPLY_DELAY_MILLIS;
+    }
+
     /**
      * How long an in-flight marker may live before it is considered lost.
      *
@@ -139,9 +160,11 @@ public final class PvcController {
     private static void searchThenPlay(MinecraftServer server, BoardKey key, String fen, String variantId) {
         BoardVariant variant = BoardRegistry.getByIdOrDefault(variantId);
         long start = System.nanoTime();
+        int thinkMillis = thinkMillisFor(variant);
+        long replyDelay = replyDelayFor(variant);
         Move move = Move.NONE;
         try {
-            move = variant.searchBestMove(fen, /*depth=*/19, THINK_MILLIS);
+            move = variant.searchBestMove(fen, /*depth=*/19, thinkMillis);
         } catch (RuntimeException e) {
             // An engine crash must not kill the worker thread: the next board
             // still needs it. The fallback below keeps this board playable.
@@ -158,7 +181,7 @@ public final class PvcController {
         }
 
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
-        long remaining = MIN_REPLY_DELAY_MILLIS - elapsedMillis;
+        long remaining = replyDelay - elapsedMillis;
         if (remaining > 0) {
             try {
                 Thread.sleep(remaining);

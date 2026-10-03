@@ -75,8 +75,11 @@ public final class ChessResignC2SPacket {
         GameBroadcaster.broadcastGameOver(boardLevel, session, pos, result);
         // Per-recipient popup naming the resigning player so the winner sees
         // "X 已认输" and the loser sees the same.
-        Component msg = Component.literal(sender.getName().getString() + " 认输 — "
-                + (result == GameResult.RED_WIN ? "红方胜" : "黑方胜"));
+        Component playerName = sender.getName();
+        Component winner = Component.translatable(result == GameResult.RED_WIN
+                ? "qisheng.chess.game.over.red_win" : "qisheng.chess.game.over.black_win");
+        Component msg = Component.translatable("qisheng.chess.resign.winner_announce",
+                playerName, winner);
         GameBroadcaster.broadcastPopup(boardLevel, session, msg,
                 PopupS2CPacket.Severity.INFO, 0);
     }

@@ -152,12 +152,39 @@ class GomokuVariantTest {
     }
 
     @Test
-    @DisplayName("searchBestMove 等同 firstLegalMove(v0.4 简 AI)")
-    void searchBestMoveIsFirstLegal() {
+    @DisplayName("searchBestMove 落在第一个空格上(空盘)")
+    void searchBestMoveOnEmptyBoard() {
         Move a = V.searchBestMove(V.initialFen(), 1, 100);
-        Move b = V.firstLegalMove(V.initialFen());
-        assertEquals(b.src(), a.src());
-        assertEquals(b.dst(), a.dst());
+        assertEquals(0, a.src());
+        assertEquals(0, a.dst());
+    }
+
+    @Test
+    @DisplayName("AI 必胜:己方四连开放端点 → 必下到五连")
+    void aiTakesWinningFour() {
+        // Black to move; black has open-4 at row 7 columns 3..6. The winning
+        // move is column 7 (right edge of the 4, completing 5 in a row).
+        // Build a FEN where only that one move wins and the AI must take it.
+        StringBuilder rows = new StringBuilder();
+        for (int r = 15; r >= 1; r--) {
+            for (int c = 0; c < 15; c++) rows.append('.');
+            if (r > 1) rows.append('/');
+        }
+        String fen = rows + " b";
+        BoardState state = V.parseState(fen);
+        assertTrue(state instanceof GomokuBoard);
+        GomokuBoard b = (GomokuBoard) state;
+        // Place four black stones on row 7 (rank index 6), columns 3,4,5,6.
+        for (int c = 3; c <= 6; c++) b.squares[GomokuBoard.sq(c, 6)] = GomokuBoard.BLACK;
+        b.moveCount = 4;
+        b.sdPlayer = 0;
+        String nearWin = V.toFen(state);
+        Move a = V.searchBestMove(nearWin, 1, 100);
+        // The winning move completes 5-in-a-row at column 7 (or 2).
+        int win1 = GomokuBoard.sq(7, 6);
+        int win2 = GomokuBoard.sq(2, 6);
+        assertTrue(a.src() == win1 || a.src() == win2,
+                "expected AI to take one of the two open ends of the 4, got " + a.src());
     }
 
     @Test

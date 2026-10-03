@@ -170,11 +170,55 @@ public final class InternationalChessVariant implements BoardVariant {
     }
 
     @Override public Move searchBestMove(String fen, int depth, int millis) {
-        // v0.3.1 ships no alpha-beta — the engine for international chess is
-        // a v0.3.2 milestone. Without it the computer opponent just hands
-        // back the first legal move, which is what PvcController plays.
-        return firstLegalMove(fen);
+        // v0.4.x ships a 1-ply capture-prefer heuristic. Real alpha-beta is
+        // still a v0.3.2 milestone. The 1-ply scan stops the computer from
+        // handing out free pieces.
+        BoardState state = parseState(fen);
+        if (!(state instanceof IntChessBoard b)) return Move.NONE;
+        int[] mvs = new int[128];
+        int n = generateAllMoves(b, mvs);
+        int bestScore = Integer.MIN_VALUE;
+        int bestSrc = -1, bestDst = -1;
+        for (int i = 0; i < n; i++) {
+            int mv = mvs[i];
+            int src = srcOf(mv);
+            int dst = dstOf(mv);
+            if (!canMove(b, src, dst)) continue;
+            int score = moveScore(b, src, dst);
+            if (score > bestScore) {
+                bestScore = score;
+                bestSrc = src;
+                bestDst = dst;
+            }
+        }
+        return bestSrc >= 0 ? new Move(bestSrc, bestDst) : Move.NONE;
     }
+
+    /**
+     * Material-only 1-ply score:
+     *   capture: 10 * victim value − 1 * mover value (MVV-LVA)
+     *   quiet:   small "advance" bonus for central moves
+     *   check / castling bonuses are out of scope for the 1-ply heuristic.
+     */
+    static int moveScore(IntChessBoard b, int src, int dst) {
+        int score = 0;
+        byte victim = b.squares[dst];
+        if (victim != 0) {
+            int victimVal = PIECE_VALUES[IntChessBoard.typeOf(victim)];
+            int moverVal = PIECE_VALUES[IntChessBoard.typeOf(b.squares[src])];
+            score += 10 * victimVal - moverVal;
+        }
+        // Tiny pawn-push / centre preference so the AI does not stall
+        // when there is nothing to capture. Centre squares d4/e4/d5/e5
+        // earn a small bonus, edge squares a/h a small penalty.
+        int f = src & 7, r = (src >>> 3) & 7;
+        int centre = Math.min(3, Math.abs(3 - f)) + Math.min(3, Math.abs(3 - r));
+        score += 6 - centre;
+        return score;
+    }
+
+    /** Standard piece values used by the 1-ply scorer. */
+    static final int[] PIECE_VALUES = {0, 1, 3, 3, 5, 9, 0};
 
     @Override public Move firstLegalMove(String fen) {
         BoardState state = parseState(fen);
@@ -209,8 +253,75 @@ public final class InternationalChessVariant implements BoardVariant {
         if (!(state instanceof IntChessBoard b)) return false;
         if (isInCheck(b, b.sdPlayer)) return false;
         if (b.halfmoveClock >= 100) return true;     // 50-move rule
+        // Threefold repetition: any prior position key appears at least twice
+        // more (so total count >= 3) in this game's history.
+        if (b.positionHistory.size() >= 3) {
+            long cur = positionKey(b);
+            int occurrences = 1;
+            for (Long past : b.positionHistory) {
+                if (past != null && past == cur) occurrences++;
+            }
+            if (occurrences >= 3) return true;
+        }
+        // Insufficient material draws (FIDE Article 5.2.2).
+        if (insufficientMaterial(b)) return true;
         int[] mvs = new int[128];
         return findAnyLegalMove(b, mvs) < 0;
+    }
+
+    /**
+     * FIDE insufficient-material draws: K vs K, K+minor vs K, K+B vs K+B with
+     * both bishops on the same square colour.
+     */
+    static boolean insufficientMaterial(IntChessBoard b) {
+        int whiteKnights = 0, blackKnights = 0;
+        int whiteBishops = 0, blackBishops = 0;
+        int whiteLightSqBishop = 0, blackLightSqBishop = 0;
+        for (int sq = 0; sq < 64; sq++) {
+            byte pc = b.squares[sq];
+            if (pc == 0) continue;
+            int type = IntChessBoard.typeOf(pc);
+            if (type == IntChessBoard.KING) continue;
+            if (type != IntChessBoard.KNIGHT && type != IntChessBoard.BISHOP) {
+                return false;   // pawn / rook / queen → can deliver mate
+            }
+            if (type == IntChessBoard.KNIGHT) {
+                if (IntChessBoard.colorOf(pc) == 0) whiteKnights++;
+                else blackKnights++;
+            } else {
+                if (IntChessBoard.colorOf(pc) == 0) whiteBishops++;
+                else blackBishops++;
+                int sqColor = (IntChessBoard.fileOf(sq) + IntChessBoard.rankOf(sq)) & 1;
+                if (IntChessBoard.colorOf(pc) == 0 && sqColor == 0) whiteLightSqBishop = 1;
+                if (IntChessBoard.colorOf(pc) == 1 && sqColor == 0) blackLightSqBishop = 1;
+            }
+        }
+        int totalMinors = whiteKnights + blackKnights + whiteBishops + blackBishops;
+        if (totalMinors == 0) return true;   // bare kings
+        if (totalMinors == 1) return true;   // K+minor vs K
+        if (whiteKnights == 0 && blackKnights == 0
+                && whiteBishops == 1 && blackBishops == 1
+                && whiteLightSqBishop == blackLightSqBishop) {
+            return true;                     // opposite-colour bishops can still mate;
+                                             // same-colour bishops cannot.
+        }
+        return false;
+    }
+
+    /**
+     * Zobrist-free position fingerprint: pack the 64 squares into 32 bytes
+     * plus side / castling / en-passant. Cheap, no random seed required, and
+     * exact (no collision risk because every byte is part of the key).
+     */
+    static long positionKey(IntChessBoard b) {
+        long h = 0L;
+        for (int sq = 0; sq < 64; sq++) {
+            h = h * 31 + (b.squares[sq] & 0xFFL);
+        }
+        h = h * 31 + b.sdPlayer;
+        h = h * 31 + b.castling;
+        h = h * 31 + (b.enPassantSq + 1);   // shift -1 to 0 so negative is distinct
+        return h;
     }
 
     @Override public char pieceFenChar(BoardState state, int sq) {
@@ -700,5 +811,10 @@ public final class InternationalChessVariant implements BoardVariant {
         }
         if (b.sdPlayer == 1) b.fullmoveNumber++;
         b.sdPlayer = 1 - b.sdPlayer;
+        // Threefold-repetition bookkeeping. Push the position fingerprint of
+        // the resulting board onto the history; stalemate detection then
+        // counts how many past entries match the current key.
+        b.positionKey = positionKey(b);
+        b.positionHistory.add(b.positionKey);
     }
 }

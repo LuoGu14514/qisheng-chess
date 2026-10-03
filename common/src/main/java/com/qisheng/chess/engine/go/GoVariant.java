@@ -186,6 +186,8 @@ public final class GoVariant implements BoardVariant {
 
     @Override public boolean canMove(BoardState state, int src, int dst) {
         if (!(state instanceof GoBoard b)) return false;
+        // Pass sentinel: src == dst == -1.
+        if (src == -1 && dst == -1) return !b.finished;
         if (src != dst) return false;          // Go: place-only, src == dst
         if (!isValidSquare(dst)) return false;
         if (b.finished) return false;
@@ -196,6 +198,8 @@ public final class GoVariant implements BoardVariant {
 
     @Override public boolean applyMove(BoardState state, int src, int dst) {
         if (!(state instanceof GoBoard b)) return false;
+        // Pass: route to applyPass so the 2-pass end-game rule fires.
+        if (src == -1 && dst == -1) return applyPass(state);
         if (!canMove(b, src, dst)) return false;
         byte stone = (byte) (b.sdPlayer == 0 ? GoBoard.BLACK : GoBoard.WHITE);
         byte oppStone = (byte) (b.sdPlayer == 0 ? GoBoard.WHITE : GoBoard.BLACK);
@@ -287,7 +291,127 @@ public final class GoVariant implements BoardVariant {
     }
 
     @Override public Move searchBestMove(String fen, int depth, int millis) {
-        return firstLegalMove(fen);
+        BoardState state = parseState(fen);
+        if (!(state instanceof GoBoard b)) return Move.NONE;
+        if (b.finished) return Move.NONE;
+        byte me = (byte) (b.sdPlayer == 0 ? GoBoard.BLACK : GoBoard.WHITE);
+        int bestPriority = Integer.MIN_VALUE;
+        int bestSq = -1;
+        for (int r = 0; r < b.size; r++) {
+            for (int f = 0; f < b.size; f++) {
+                int sq = b.sq(f, r);
+                if (!canMove(b, sq, sq)) continue;
+                int p = placementPriority(b, sq, me);
+                if (p > bestPriority) {
+                    bestPriority = p;
+                    bestSq = sq;
+                }
+            }
+        }
+        return bestSq >= 0 ? new Move(bestSq, bestSq) : Move.NONE;
+    }
+
+    /**
+     * 1-ply placement heuristic.
+     *   Tier 100 + capture-count: take enemy stones.
+     *   Tier 30  + own-adjacency: extend our own groups.
+     *   Tier 20: connect to enemy (potential threat / territory).
+     *   Tier 0:  neutral placement (prefer centre over edge).
+     *   Tier -50: own-eye filler (4 same-colour neighbours) — almost always bad.
+     */
+    static int placementPriority(GoBoard b, int sq, byte me) {
+        byte opp = (me == GoBoard.BLACK) ? GoBoard.WHITE : GoBoard.BLACK;
+        int ownAdj = 0, oppAdj = 0;
+        int f = b.fileOf(sq), r = b.rankOf(sq);
+        int[][] nbrs = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        int[] liberties = new int[4]; // index = neighbour direction, value = liberty count for that enemy group
+        for (int i = 0; i < 4; i++) {
+            int nf = f + nbrs[i][0], nr = r + nbrs[i][1];
+            if (nf < 0 || nf >= b.size || nr < 0 || nr >= b.size) continue;
+            byte n = b.squares[b.sq(nf, nr)];
+            if (n == me) ownAdj++;
+            else if (n == opp) {
+                oppAdj++;
+                liberties[i] = countGroupLiberties(b, nf, nr);
+            }
+        }
+        // Captures: every enemy neighbour with 1 liberty is in atari; capture count
+        // equals the size of that group. We sum all of them (without double-counting
+        // groups that share this intersection, which is impossible by construction).
+        int captures = 0;
+        for (int i = 0; i < 4; i++) {
+            if (liberties[i] == 1) captures += groupSize(b, b.fileOf(sq) + nbrs[i][0], b.rankOf(sq) + nbrs[i][1]);
+        }
+        // Filling our own eye (4 own neighbours) is almost always a bad move.
+        if (ownAdj == 4) return -50;
+        int score = 0;
+        if (captures > 0) {
+            score += 100 + captures;
+        } else if (ownAdj > 0) {
+            score += 30 + ownAdj;
+        } else if (oppAdj > 0) {
+            score += 20;
+        }
+        // Mild centre preference so the AI does not start in a corner when it
+        // has nothing to do — centre distance to (size/2, size/2).
+        int mid = b.size / 2;
+        int dist = Math.abs(f - mid) + Math.abs(r - mid);
+        score += Math.max(0, 4 - dist);
+        return score;
+    }
+
+    /** Flood-fill: count liberties of the group containing (f, r). */
+    static int countGroupLiberties(GoBoard b, int f, int r) {
+        byte colour = b.squares[b.sq(f, r)];
+        if (colour == GoBoard.EMPTY) return 0;
+        boolean[] seen = new boolean[b.size * b.size];
+        int[] stack = new int[b.size * b.size];
+        int top = 0, liberties = 0;
+        stack[top++] = b.sq(f, r);
+        seen[b.sq(f, r)] = true;
+        int[][] nbrs = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        while (top > 0) {
+            int s = stack[--top];
+            int sf = b.fileOf(s), sr = b.rankOf(s);
+            for (int[] n : nbrs) {
+                int nf = sf + n[0], nr = sr + n[1];
+                if (nf < 0 || nf >= b.size || nr < 0 || nr >= b.size) continue;
+                int nsq = b.sq(nf, nr);
+                if (b.squares[nsq] == GoBoard.EMPTY) liberties++;
+                else if (b.squares[nsq] == colour && !seen[nsq]) {
+                    seen[nsq] = true;
+                    stack[top++] = nsq;
+                }
+            }
+        }
+        return liberties;
+    }
+
+    /** Flood-fill: count stones in the group containing (f, r). */
+    static int groupSize(GoBoard b, int f, int r) {
+        byte colour = b.squares[b.sq(f, r)];
+        if (colour == GoBoard.EMPTY) return 0;
+        boolean[] seen = new boolean[b.size * b.size];
+        int[] stack = new int[b.size * b.size];
+        int top = 0, count = 0;
+        stack[top++] = b.sq(f, r);
+        seen[b.sq(f, r)] = true;
+        while (top > 0) {
+            int s = stack[--top];
+            count++;
+            int sf = b.fileOf(s), sr = b.rankOf(s);
+            int[][] nbrs = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+            for (int[] n : nbrs) {
+                int nf = sf + n[0], nr = sr + n[1];
+                if (nf < 0 || nf >= b.size || nr < 0 || nr >= b.size) continue;
+                int nsq = b.sq(nf, nr);
+                if (b.squares[nsq] == colour && !seen[nsq]) {
+                    seen[nsq] = true;
+                    stack[top++] = nsq;
+                }
+            }
+        }
+        return count;
     }
 
     @Override public Move firstLegalMove(String fen) {

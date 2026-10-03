@@ -75,6 +75,18 @@ public final class IntChessBoard implements BoardState {
     public int halfmoveClock = 0;
     public int fullmoveNumber = 1;
 
+    /**
+     * Position fingerprint for threefold-repetition detection. Recomputed by
+     * the variant whenever a state field changes; the same board state with
+     * the same en-passant / castling / side-to-move must hash to the same
+     * long. {@link #positionHistory} stores every key from the start of the
+     * game for use by {@code isStalemate}.
+     */
+    public long positionKey = 0L;
+    public java.util.ArrayList<Long> positionHistory = new java.util.ArrayList<>();
+
     /** A pristine board ready for {@code initialFen()} to be loaded. */
-    public IntChessBoard() {}
+    public IntChessBoard() {
+        positionHistory.add(positionKey);
+    }
 }

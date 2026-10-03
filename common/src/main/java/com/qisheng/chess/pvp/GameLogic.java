@@ -143,6 +143,32 @@ public final class GameLogic {
         return applyMove(session, src, dst);
     }
 
+    /**
+     * Pass action — currently only meaningful for {@code go9} / {@code go19}.
+     * Re-uses {@code Move(-1, -1)} as the sentinel; {@code BoardVariant.applyMove}
+     * routes that to {@code applyPass} for Go and rejects it elsewhere.
+     */
+    public static MoveOutcome tryPass(GameSession session, UUID playerId) {
+        if (session == null) return MoveOutcome.NOT_IN_GAME;
+        GameState state = session.getState();
+        if (state == GameState.FINISHED) return MoveOutcome.GAME_FINISHED;
+        if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
+        int role = session.getPlayerRole(playerId);
+        if (role < 0) return MoveOutcome.NOT_IN_GAME;
+        if (role != session.getSdPlayer()) return MoveOutcome.NOT_YOUR_TURN;
+        BoardVariant v = session.getVariant();
+        BoardState bs = session.getBoardState();
+        // Variants that don't support pass just return ILLEGAL_MOVE. The Go
+        // variants flip sdPlayer via applyPass and check for 2-pass end inside
+        // their own applyMove implementation.
+        if (!v.canMove(bs, -1, -1)) return MoveOutcome.ILLEGAL_MOVE;
+        if (!v.applyMove(bs, -1, -1)) return MoveOutcome.ILLEGAL_MOVE;
+        session.setSdPlayer(1 - session.getSdPlayer());
+        session.setSelectPoint(-1);
+        session.checkGameOver();
+        return MoveOutcome.OK;
+    }
+
     /** The shared tail of every move path: validate, mutate, flip, check game-over. */
     private static MoveOutcome applyMove(GameSession session, int src, int dst) {
         BoardVariant v = session.getVariant();

@@ -50,6 +50,7 @@ public class ChessInteractC2SPacket {
     public static final int ACTION_JOIN = 0;
     public static final int ACTION_SELECT = 1;
     public static final int ACTION_MOVE = 2;
+    public static final int ACTION_PASS = 3;
 
     public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
         ServerPlayer player = (ServerPlayer) ctx.getPlayer();
@@ -60,7 +61,7 @@ public class ChessInteractC2SPacket {
         int action = buf.readByte();
 
         // 未知动作:记一条日志就走,不回包(免得把服务端当探针用)。
-        if (action != ACTION_JOIN && action != ACTION_SELECT && action != ACTION_MOVE) {
+        if (action != ACTION_JOIN && action != ACTION_SELECT && action != ACTION_MOVE && action != ACTION_PASS) {
             LOG.warn("[qisheng] Player {} sent unknown board interaction action {} @ {}",
                     player.getName().getString(), action, pos);
             return;
@@ -100,6 +101,7 @@ public class ChessInteractC2SPacket {
                 if (buf.readableBytes() < 2 * Short.BYTES) return;
                 handleMove(player, boardLevel, session, pos, buf.readShort(), buf.readShort());
             }
+            case ACTION_PASS -> handlePass(player, boardLevel, session, pos);
         }
     }
 
@@ -201,6 +203,21 @@ public class ChessInteractC2SPacket {
                 GameBroadcaster.sendPopupTo(player, GameMessages.describeMove(out),
                         PopupS2CPacket.Severity.WARN, 3);
             }
+        }
+    }
+
+    private static void handlePass(ServerPlayer player, ServerLevel boardLevel, GameSession session, BlockPos pos) {
+        GameLogic.MoveOutcome out = GameLogic.tryPass(session, player.getUUID());
+        if (out == GameLogic.MoveOutcome.OK) {
+            GameResult result = session.getResult();
+            if (result != GameResult.ONGOING) {
+                GameBroadcaster.broadcastGameOver(boardLevel, session, pos, result);
+            } else {
+                GameBroadcaster.broadcastSync(boardLevel, session, pos);
+            }
+        } else {
+            GameBroadcaster.sendPopupTo(player, GameMessages.describeMove(out),
+                    PopupS2CPacket.Severity.WARN, 3);
         }
     }
 

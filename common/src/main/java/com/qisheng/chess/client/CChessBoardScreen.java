@@ -6,6 +6,7 @@ import com.qisheng.chess.engine.BoardVariant;
 import com.qisheng.chess.engine.ChineseChessEngine;
 import com.qisheng.chess.engine.gomoku.GomokuBoard;
 import com.qisheng.chess.engine.go.GoBoard;
+import com.qisheng.chess.engine.international.IntChessBoard;
 import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.network.ChatPackets;
 import com.qisheng.chess.network.ChessResignC2SPacket;
@@ -75,6 +76,7 @@ public class CChessBoardScreen extends Screen {
 
     private static final int ACTION_SELECT = 1;
     private static final int ACTION_MOVE   = 2;
+    private static final int ACTION_PASS   = 3;
 
     /** Sentinel square index used by Go to represent a pass (no stone placed). */
     private static final int PASS_SQ = -1;
@@ -259,8 +261,8 @@ public class CChessBoardScreen extends Screen {
         this.myRole = myRole;
         this.viewerIsBlack = (myRole == 1);
         this.boardFlipped = this.viewerIsBlack ^ flipped;
-        this.lastMoveSrc = ChineseChessEngine.isSquare(lastMoveSrc) ? lastMoveSrc : -1;
-        this.lastMoveDst = ChineseChessEngine.isSquare(lastMoveDst) ? lastMoveDst : -1;
+        this.lastMoveSrc = variant().isValidSquare(lastMoveSrc) ? lastMoveSrc : -1;
+        this.lastMoveDst = variant().isValidSquare(lastMoveDst) ? lastMoveDst : -1;
         // 打开棋盘界面（开局 / 重开）时 fen 与 selectedSq 在这里被赋值，
         // 之后同样要作废缓存，让首次绘制按当前状态重建。
         refreshBoardCaches();
@@ -309,8 +311,8 @@ public class CChessBoardScreen extends Screen {
         this.selectedSq = selectPoint;
         int prevSrc = this.lastMoveSrc;
         int prevDst = this.lastMoveDst;
-        this.lastMoveSrc = ChineseChessEngine.isSquare(lastMoveSrc) ? lastMoveSrc : -1;
-        this.lastMoveDst = ChineseChessEngine.isSquare(lastMoveDest) ? lastMoveDest : -1;
+        this.lastMoveSrc = variant().isValidSquare(lastMoveSrc) ? lastMoveSrc : -1;
+        this.lastMoveDst = variant().isValidSquare(lastMoveDest) ? lastMoveDest : -1;
         // 选子 / 落子 / 开局 / 重开全都由服务器同步到这里，这是运行期唯一改动
         // fen 与 selectedSq 的入口：赋值后立刻作废棋盘与落点缓存，下一帧按新
         // 状态重算一次（宁可多刷一次，也不能漏刷）。
@@ -518,7 +520,7 @@ public class CChessBoardScreen extends Screen {
         int rightX = LEFT_W + availW + PADDING;
         int rightW = RIGHT_W - 2 * PADDING;
         if (rightW < 120) rightW = 120;
-        int maxButtons = 7;
+        int maxButtons = 8;
         int actionH = maxButtons * (BTN_H + BTN_GAP);
         this.actionRect = new Rect(rightX, contentTop, rightW, actionH);
         int chatY = contentTop + actionH + PADDING;
@@ -545,6 +547,10 @@ public class CChessBoardScreen extends Screen {
             acts.add(new ActionButtonsWidget.Action(
                     Component.translatable("qisheng.chess.action.resign").getString(),
                     ActionButtonsWidget.Kind.DANGER, this::onClickResign));
+            // Pass is a Go-only move: two consecutive passes end the game.
+            if (isGo()) acts.add(new ActionButtonsWidget.Action(
+                    Component.translatable("qisheng.chess.action.pass").getString(),
+                    ActionButtonsWidget.Kind.NEUTRAL, this::onClickPass));
         }
         if (amSpec && inGame) {
             if (redEmpty) acts.add(new ActionButtonsWidget.Action(
@@ -586,6 +592,10 @@ public class CChessBoardScreen extends Screen {
                     NetworkManager.sendToServer(ModNetwork.CHESS_RESIGN, buf);
                 },
                 () -> {});
+    }
+
+    private void onClickPass() {
+        sendInteract(ACTION_PASS, 0, 0);
     }
 
     private void onClickTakeOver(int role) {
@@ -772,14 +782,14 @@ public class CChessBoardScreen extends Screen {
                 drawPieces(gfx, pos);
                 // 是否在盘上统一用门面判断：selectedSq 来自网络包，越界时
                 // pos.squares[selectedSq] 会直接抛数组越界。
-                if (ChineseChessEngine.isSquare(selectedSq) && pos.squares[selectedSq] != 0) {
+                if (variant().isValidSquare(selectedSq) && pos.squares[selectedSq] != 0) {
                     drawSelection(gfx, selectedSq);
                     drawLegalDots(gfx, pos, selectedSq);
                 }
             }
         } else if ("international".equals(this.variantId)) {
             drawFrame(gfx);
-            drawInternationalPlaceholder(gfx);
+            drawInternationalBoard(gfx, bs);
         } else if (isGomoku()) {
             drawFrame(gfx);
             drawGomokuBoard(gfx, bs);
@@ -815,6 +825,104 @@ public class CChessBoardScreen extends Screen {
         int cy = boardY + boardH / 2;
         gfx.drawCenteredString(this.font, line1, cx, cy - 10, COL_TEXT_PRIMARY);
         gfx.drawCenteredString(this.font, line2, cx, cy + 10, COL_TEXT_MUTED);
+    }
+
+    /** Light / dark square colors for the 8x8 chessboard. */
+    private static final int COL_INT_LIGHT = 0xFFEFE2C8;
+    private static final int COL_INT_DARK  = 0xFF8E6A4A;
+
+    /** Letter color for white pieces (sits on a light disc). */
+    private static final int COL_INT_WHITE_PIECE_TEXT = 0xFF1E1E1E;
+    /** Letter color for black pieces (sits on a dark disc). */
+    private static final int COL_INT_BLACK_PIECE_TEXT = 0xFFF6F1E1;
+
+    /**
+     * International chess board: 8x8 alternating squares with pieces drawn as
+     * colored discs (white = light fill, black = dark fill) carrying a
+     * {@link BoardVariant#pieceFenChar pieceFenChar} letter on top. The view
+     * mirrors the same selection / legal-dot / last-move stack as the other
+     * variants.
+     */
+    private void drawInternationalBoard(GuiGraphics gfx, BoardState bs) {
+        int cMax = cols();
+        int rMax = rows();
+        // Frame + alternating squares.
+        int fx0 = boardX - 16;
+        int fy0 = boardY - 16;
+        gfx.fill(fx0, fy0, fx0 + boardW + 32, fy0 + boardH + 32, COL_GRID_DARK);
+        for (int r = 0; r < rMax; r++) {
+            for (int c = 0; c < cMax; c++) {
+                int col = (c + r) & 1;
+                int sqColor = (col == 0) ? COL_INT_LIGHT : COL_INT_DARK;
+                int x = squareX(c);
+                int y = squareY(r);
+                gfx.fill(x, y, x + cell, y + cell, sqColor);
+            }
+        }
+        // File / rank labels around the edge so the player can read squares.
+        int labelColor = 0xFF2A2A2A;
+        for (int c = 0; c < cMax; c++) {
+            char fc = (char) ('a' + c);
+            String s = String.valueOf(fc);
+            int tw = this.font.width(s);
+            int x = squareX(c) + (cell - tw) / 2;
+            int yTop = boardY - 12;
+            int yBot = boardY + boardH + 4;
+            gfx.drawString(this.font, s, x, yTop, labelColor);
+            gfx.drawString(this.font, s, x, yBot, labelColor);
+        }
+        for (int r = 0; r < rMax; r++) {
+            int rn = rMax - r;
+            String s = String.valueOf(rn);
+            int tw = this.font.width(s);
+            int y = squareY(r) + (cell - this.font.lineHeight) / 2;
+            int xLeft = boardX - 12 - tw;
+            int xRight = boardX + boardW + 4;
+            gfx.drawString(this.font, s, xLeft, y, labelColor);
+            gfx.drawString(this.font, s, xRight, y, labelColor);
+        }
+
+        if (bs == null) return;
+
+        // Last-move overlay (variant-aware so it works for 8x8 too).
+        drawLastMoveOverlay(gfx);
+
+        BoardVariant v = variant();
+        int discR = Math.max(13, cell / 2 - 2);
+        for (int rank = 0; rank < rMax; rank++) {
+            for (int file = 0; file < cMax; file++) {
+                int sq = v.indexForFileRank(file, rank);
+                byte pc = v.pieceAt(bs, sq);
+                if (pc == 0) continue;
+                drawInternationalPiece(gfx, viewCX(file), viewCY(rank), discR, pc, v, sq, bs);
+            }
+        }
+
+        // Selection + legal destinations on top.
+        if (v.isValidSquare(selectedSq) && v.pieceAt(bs, selectedSq) != 0) {
+            drawSelection(gfx, selectedSq);
+            drawLegalDots(gfx, bs, selectedSq);
+        }
+    }
+
+    /**
+     * Draw a single international chess piece. White pieces use a light disc
+     * with dark text; black pieces use a dark disc with light text. The
+     * letter comes from {@link BoardVariant#pieceFenChar} so the screen
+     * follows whatever the variant's FEN dialect uses.
+     */
+    private void drawInternationalPiece(GuiGraphics gfx, int cx, int cy, int r,
+                                        byte pc, BoardVariant v, int sq, BoardState bs) {
+        boolean isWhite = IntChessBoard.colorOf(pc) == 0;
+        int discFill = isWhite ? COL_INT_LIGHT : COL_INT_DARK;
+        int ringColor = isWhite ? COL_INT_DARK : COL_INT_LIGHT;
+        gfx.fill(cx - r, cy - r, cx + r, cy + r, discFill);
+        drawRectOutline(gfx, cx - r, cy - r, 2 * r, 2 * r, ringColor, 2);
+
+        String letter = String.valueOf(v.pieceFenChar(bs, sq));
+        int textColor = isWhite ? COL_INT_WHITE_PIECE_TEXT : COL_INT_BLACK_PIECE_TEXT;
+        int tw = this.font.width(letter);
+        gfx.drawString(this.font, letter, cx - tw / 2, cy - this.font.lineHeight / 2, textColor);
     }
 
     /**
@@ -1143,10 +1251,12 @@ public class CChessBoardScreen extends Screen {
     }
 
     private void drawLastMoveSquare(GuiGraphics gfx, int sq) {
-        if (!ChineseChessEngine.isSquare(sq)) return;
-        int sf = (sq & 0xF) - Position.FILE_LEFT;
-        int sr = ((sq >> 4) & 0xF) - Position.RANK_TOP;
-        if (sf < 0 || sf >= COLS || sr < 0 || sr >= ROWS) return;
+        if (sq < 0) return;
+        BoardVariant v = variant();
+        if (!v.isValidSquare(sq)) return;
+        int sf = v.fileOf(sq);
+        int sr = v.rankOf(sq);
+        if (sf < 0 || sf >= cols() || sr < 0 || sr >= rows()) return;
         int pad = Math.max(3, cell / 12);
         int r = Math.max(10, cell / 2) + pad;
         int cx = viewCX(sf), cy = viewCY(sr);
@@ -1178,12 +1288,39 @@ public class CChessBoardScreen extends Screen {
         // legalDestinations() 在 (fen, selectedSq) 变化时重算一次。
         boolean[] dests = legalDestinations();
         int dotR = Math.max(3, cell / 7);
-        for (int file = 0; file < COLS; file++) {
-            for (int rank = 0; rank < ROWS; rank++) {
-                int dst = Position.COORD_XY(file + Position.FILE_LEFT,
-                                            rank + Position.RANK_TOP);
+        BoardVariant v = variant();
+        int cMax = cols(), rMax = rows();
+        for (int file = 0; file < cMax; file++) {
+            for (int rank = 0; rank < rMax; rank++) {
+                int dst = v.indexForFileRank(file, rank);
                 if (!dests[dst]) continue;
-                byte dstPc = pos.squares[dst];
+                byte dstPc = v.pieceAt(pos, dst);
+                int cx = viewCX(file), cy = viewCY(rank);
+                if (dstPc == 0) {
+                    gfx.fill(cx - dotR, cy - dotR, cx + dotR + 1, cy + dotR + 1, COL_LEGAL_DOT);
+                } else {
+                    int ringR = Math.max(10, cell / 2) + 4;
+                    drawRectOutline(gfx, cx - ringR, cy - ringR, 2 * ringR, 2 * ringR, COL_CAPTURE_RING, 2);
+                }
+            }
+        }
+    }
+
+    /**
+     * Variant-aware overload used by renderers that already have a
+     * {@link BoardState} (gomoku / go / international). Uses
+     * {@link BoardVariant#pieceAt} so it does not require a {@code Position}.
+     */
+    private void drawLegalDots(GuiGraphics gfx, BoardState bs, int selectedSq) {
+        boolean[] dests = legalDestinations();
+        int dotR = Math.max(3, cell / 7);
+        BoardVariant v = variant();
+        int cMax = cols(), rMax = rows();
+        for (int file = 0; file < cMax; file++) {
+            for (int rank = 0; rank < rMax; rank++) {
+                int dst = v.indexForFileRank(file, rank);
+                if (!dests[dst]) continue;
+                byte dstPc = v.pieceAt(bs, dst);
                 int cx = viewCX(file), cy = viewCY(rank);
                 if (dstPc == 0) {
                     gfx.fill(cx - dotR, cy - dotR, cx + dotR + 1, cy + dotR + 1, COL_LEGAL_DOT);
@@ -1210,8 +1347,9 @@ public class CChessBoardScreen extends Screen {
             case 2 -> Component.translatable("qisheng.chess.state.finished").getString();
             default -> Component.translatable("qisheng.chess.state.unknown").getString();
         };
+        String variantStr = Component.translatable(variant().displayNameKey()).getString();
         String title = Component.translatable("qisheng.chess.screen.title_bar",
-                roleStr, turnStr, stateStr).getString();
+                variantStr, roleStr, turnStr, stateStr).getString();
         int tw = this.font.width(title);
         gfx.drawString(this.font, title, (this.width - tw) / 2, PADDING, COL_TEXT_PRIMARY);
     }
@@ -1347,10 +1485,6 @@ public class CChessBoardScreen extends Screen {
                 ||  (myRole == 1 && (pc & 16) == 16));
 
         if (isMyPiece) {
-            if (selectedSq == sq) {
-                sendInteract(ACTION_SELECT, sq, 0);
-                return;
-            }
             sendInteract(ACTION_SELECT, sq, 0);
             return;
         }
@@ -1375,6 +1509,7 @@ public class CChessBoardScreen extends Screen {
             buf.writeShort(a);
             buf.writeShort(b);
         }
+        // ACTION_PASS carries no payload.
         NetworkManager.sendToServer(ModNetwork.CHESS_INTERACT, buf);
     }
 }

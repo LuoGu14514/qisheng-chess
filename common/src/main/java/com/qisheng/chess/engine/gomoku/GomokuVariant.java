@@ -181,7 +181,22 @@ public final class GomokuVariant implements BoardVariant {
     }
 
     @Override public Move searchBestMove(String fen, int depth, int millis) {
-        return firstLegalMove(fen);
+        BoardState state = parseState(fen);
+        if (!(state instanceof GomokuBoard b)) return Move.NONE;
+        if (b.winner != GomokuBoard.EMPTY) return Move.NONE;
+        byte me = (byte) (b.sdPlayer == 0 ? GomokuBoard.BLACK : GomokuBoard.WHITE);
+        byte opp = (byte) (me == GomokuBoard.BLACK ? GomokuBoard.WHITE : GomokuBoard.BLACK);
+        int bestPriority = Integer.MIN_VALUE;
+        int bestSq = -1;
+        for (int sq = 0; sq < totalSquares(); sq++) {
+            if (b.squares[sq] != GomokuBoard.EMPTY) continue;
+            int p = placementPriority(b, sq, me, opp);
+            if (p > bestPriority) {
+                bestPriority = p;
+                bestSq = sq;
+            }
+        }
+        return bestSq >= 0 ? new Move(bestSq, bestSq) : Move.NONE;
     }
 
     @Override public Move firstLegalMove(String fen) {
@@ -193,6 +208,82 @@ public final class GomokuVariant implements BoardVariant {
         }
         return Move.NONE;
     }
+
+    /**
+     * Threat-scan for one empty square. Priority is decided by what placing our
+     * stone there would create vs. what we would leave as a threat for the
+     * opponent. The opponent's threat is treated as the pattern we must block:
+     * if the square would let the opponent complete a 5 (or 4-open) we treat
+     * that as the higher priority. We try the move twice in memory (my stone,
+     * opponent stone) so we don't actually mutate the board.
+     */
+    static int placementPriority(GomokuBoard b, int sq, byte me, byte opp) {
+        int myScore = patternScore(b, sq, me);
+        int oppScore = patternScore(b, sq, opp);
+        // If I can win here, that overrides any consideration of the opponent.
+        if (myScore >= WIN_OWN) return WIN_OWN;
+        // If placing opp stone here lets them win, we MUST block (or play our own win, handled above).
+        if (oppScore >= WIN_OWN) return WIN_BLOCK;
+        if (myScore >= OPEN4_OWN) return myScore;
+        if (oppScore >= OPEN4_OWN) return Math.max(myScore, OPEN4_BLOCK);
+        return Math.max(myScore, oppScore);
+    }
+
+    /** Count contiguous stones around {@code sq} as if {@code stone} were placed there.
+     *  Returns the best (runLength + openSides) combination as a priority bucket. */
+    static int patternScore(GomokuBoard b, int sq, byte stone) {
+        int bestBucket = 0;
+        int[][] dirs = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
+        int f = GomokuBoard.fileOf(sq), r = GomokuBoard.rankOf(sq);
+        for (int[] d : dirs) {
+            int df = d[0], dr = d[1];
+            int forward = 0;
+            int ff = f + df, rr = r + dr;
+            while (ff >= 0 && ff < GomokuBoard.SIZE && rr >= 0 && rr < GomokuBoard.SIZE
+                    && b.squares[GomokuBoard.sq(ff, rr)] == stone) {
+                forward++;
+                ff += df;
+                rr += dr;
+            }
+            boolean forwardOpen = ff >= 0 && ff < GomokuBoard.SIZE
+                    && rr >= 0 && rr < GomokuBoard.SIZE
+                    && b.squares[GomokuBoard.sq(ff, rr)] == GomokuBoard.EMPTY;
+            int backward = 0;
+            int bf = f - df, br = r - dr;
+            while (bf >= 0 && bf < GomokuBoard.SIZE && br >= 0 && br < GomokuBoard.SIZE
+                    && b.squares[GomokuBoard.sq(bf, br)] == stone) {
+                backward++;
+                bf -= df;
+                br -= dr;
+            }
+            boolean backwardOpen = bf >= 0 && bf < GomokuBoard.SIZE
+                    && br >= 0 && br < GomokuBoard.SIZE
+                    && b.squares[GomokuBoard.sq(bf, br)] == GomokuBoard.EMPTY;
+            int len = forward + backward + 1;
+            boolean openBoth = forwardOpen && backwardOpen;
+            boolean openOne = forwardOpen || backwardOpen;
+            int bucket;
+            if (len >= 5) bucket = WIN_OWN;
+            else if (len == 4 && openBoth) bucket = OPEN4_OWN;
+            else if (len == 4 && openOne) bucket = CLOSED4_OWN;
+            else if (len == 3 && openBoth) bucket = OPEN3_OWN;
+            else if (len == 3 && openOne) bucket = CLOSED3_OWN;
+            else if (len == 2 && openBoth) bucket = OPEN2_OWN;
+            else bucket = 0;
+            if (bucket > bestBucket) bestBucket = bucket;
+        }
+        return bestBucket;
+    }
+
+    /** Priority buckets — higher number wins. */
+    static final int WIN_OWN = 100000;
+    static final int WIN_BLOCK = 90000;
+    static final int OPEN4_OWN = 8000;
+    static final int OPEN4_BLOCK = 7000;
+    static final int CLOSED4_OWN = 500;
+    static final int OPEN3_OWN = 400;
+    static final int CLOSED3_OWN = 50;
+    static final int OPEN2_OWN = 10;
 
     @Override public boolean isInCheck(BoardState state, int side) {
         // Gomoku has no "check" concept.

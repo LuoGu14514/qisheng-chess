@@ -181,6 +181,111 @@ class InternationalChessVariantTest {
         assertEquals(Move.NONE, none);
     }
 
+    @Test
+    @DisplayName("AI 1-ply:能吃免费子时不吃闲子")
+    void aiPrefersCaptureOverQuietMove() {
+        // White queen on d4 is hanging; black knight on e6 is the only black
+        // attacker (no e5 pawn in this position). Black plays Nxe6d4? No —
+        // e6d4 is not knight move. We need a position where the black knight
+        // has a real capture. Use: white queen on d5, black knight on e7
+        // (file 4 + rank 6 * 8 = 52), no black pawn on e5 to compete.
+        // FEN starts rank 7 = "4k3/8/4n3/3Q4/8/8/8/4K3 b - - 0 1"
+        // Place a black knight on e7 and the white queen on d5.
+        String fen = "4k3/8/4n3/3Q4/8/8/8/4K3 b - - 0 1";
+        // Verify the initial board via parseState, then verify the knight is
+        // on e7. (Position has black knight on e6 by default; we need to
+        // check the AI's actual choice — both knights on e6 and the bishop
+        // can NOT take Qd5 because no piece attacks d5 in this FEN, so this
+        // is a quiet-position test. Let me redo it.)
+        // Redo: white queen on d5, black knight on e7 (free capture),
+        // no black pawn on e5.
+        // FEN: "4k3/4n3/8/3Q4/8/8/8/4K3 b - - 0 1"
+        fen = "4k3/4n3/8/3Q4/8/8/8/4K3 b - - 0 1";
+        IntChessBoard b = (IntChessBoard) V.parseState(fen);
+        // Sanity check the pieces are where we expect.
+        assertEquals(IntChessBoard.B_KNIGHT, b.squares[sq("e7")]);
+        assertEquals(IntChessBoard.W_QUEEN, b.squares[sq("d5")]);
+        // No black pawn on e5 (or e-file pawn).
+        assertEquals(IntChessBoard.EMPTY, b.squares[sq("e5")]);
+        Move a = V.searchBestMove(fen, 1, 100);
+        // The capture is e7xd5 (file 4 + rank 6 * 8 = 52 → 3 + 4*8 = 35).
+        assertEquals(sq("e7"), a.src());
+        assertEquals(sq("d5"), a.dst());
+    }
+
+    @Test
+    @DisplayName("三次重复局面算和棋(走 Ng1-f3, Ng8-f6, Nf3-g1, Nf6-g8 两次)")
+    void threefoldRepetitionIsDraw() {
+        // Build a FEN with white knight on g1 + black knight on g8 + kings.
+        String fen = "4k1n1/8/8/8/8/8/8/4K1N1 w - - 0 1";
+        IntChessBoard b = (IntChessBoard) V.parseState(fen);
+        // Push 4 knight shuffles back and forth twice = 4+4 = 8 plies, which
+        // crosses the position fingerprint twice after the initial key.
+        int[] cycle = {
+            sq("g1"), sq("f3"), sq("g8"), sq("f6"),
+            sq("f3"), sq("g1"), sq("f6"), sq("g8"),
+            sq("g1"), sq("f3"), sq("g8"), sq("f6"),
+            sq("f3"), sq("g1"), sq("f6"), sq("g8"),
+        };
+        for (int i = 0; i < cycle.length; i += 2) {
+            assertTrue(V.applyMove(b, cycle[i], cycle[i + 1]), "move " + i);
+        }
+        assertTrue(V.isStalemate(b), "expected threefold draw, got isStalemate=false");
+    }
+
+    @Test
+    @DisplayName("子力不足和棋:K vs K")
+    void insufficientMaterialBareKings() {
+        String fen = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
+        IntChessBoard b = (IntChessBoard) V.parseState(fen);
+        assertTrue(V.isStalemate(b), "K vs K should be a draw");
+    }
+
+    @Test
+    @DisplayName("子力不足和棋:K+象 vs K(单边)")
+    void insufficientMaterialKnightOrBishopVsKing() {
+        String fen = "4k3/8/8/8/8/8/8/4KB2 w - - 0 1";
+        IntChessBoard b = (IntChessBoard) V.parseState(fen);
+        assertTrue(V.isStalemate(b), "K+B vs K should be a draw");
+    }
+
+    @Test
+    @DisplayName("子力不足和棋:同色格象双方各一")
+    void insufficientMaterialSameColourBishops() {
+        // Both bishops on light squares (file+rank even).
+        // White bishop a1 (file 0 + rank 0 = 0), black bishop c8
+        // (file 2 + rank 7 = 9, odd → dark). Pick e8: file 4 + rank 7 = 11,
+        // odd → dark. Wrong. Try b8: file 1 + rank 7 = 8, even → light.
+        // FEN: black king e8, black bishop b8 (light), white king e1,
+        // white bishop a1 (light).
+        String fen = "1k1b4/8/8/8/8/8/8/B3K3 b - - 0 1";
+        IntChessBoard b = (IntChessBoard) V.parseState(fen);
+        assertTrue(V.isStalemate(b), "same-colour bishops should be a draw");
+    }
+
+    @Test
+    @DisplayName("子力不足不是和棋:异色格象")
+    void insufficientMaterialNotOppositeColourBishops() {
+        // White bishop on a1 (light, file+rank=0), black bishop on h7 (dark,
+        // file+rank=13). Different colours → still mateable.
+        String fen = "4k3/7b/8/8/8/8/8/B3K3 b - - 0 1";
+        IntChessBoard b = (IntChessBoard) V.parseState(fen);
+        assertFalse(V.isStalemate(b), "opposite-colour bishops are not a draw");
+    }
+
+    @Test
+    @DisplayName("positionHistory 跟踪走子")
+    void positionHistoryTracksMoves() {
+        String fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        IntChessBoard b = (IntChessBoard) V.parseState(fen);
+        // Initial FEN contributes 1 entry; each applyMove adds another.
+        int start = b.positionHistory.size();
+        V.applyMove(b, sq("e2"), sq("e4"));
+        V.applyMove(b, sq("e7"), sq("e5"));
+        V.applyMove(b, sq("g1"), sq("f3"));
+        assertEquals(start + 3, b.positionHistory.size());
+    }
+
     // ---- helpers ----
 
     /** Algebraic a1..h8 → 0..63 索引。a1 = 0,h8 = 63。 */

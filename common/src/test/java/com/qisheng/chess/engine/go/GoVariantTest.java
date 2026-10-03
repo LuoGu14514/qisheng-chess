@@ -254,11 +254,11 @@ class GoVariantTest {
     }
 
     @Test
-    @DisplayName("searchBestMove 等同 firstLegalMove")
-    void searchBestMoveIsFirstLegal() {
+    @DisplayName("searchBestMove 走 placementPriority,空盘时挑接近中心的空点")
+    void searchBestMovePrefersCentreOnEmptyBoard() {
         Move a = V9.searchBestMove(V9.initialFen(), 1, 100);
-        Move b = V9.firstLegalMove(V9.initialFen());
-        assertEquals(b.src(), a.src());
+        // Empty 9x9 board: every empty square scores >= 0; centre (4,4) = 4 + 4*9 = 40.
+        assertEquals(40, a.src());
     }
 
     // ---- Accessors ----
@@ -300,6 +300,32 @@ class GoVariantTest {
         BoardState state = V9.initialState();
         assertFalse(V9.isInCheck(state, 0));
         assertFalse(V9.isInCheck(state, 1));
+    }
+
+    @Test
+    @DisplayName("AI 1-ply:可提子时必提,不在空盘浪费手")
+    void aiTakesObviousCapture() {
+        // Black to move. White single stone at (4,4) with no liberties
+        // except (4,3), where black is in atari after black's hypothetical
+        // placement. Build a board:
+        //   row 5 (rank 4): ....W....  (one white stone at file 4)
+        //   row 4 (rank 3): ........X (already one black stone blocking south)
+        //   row 3 (rank 2): all walls, i.e. (4,2) occupied by black already
+        // We'll set up a simpler atari: white stone at (3,3), black stones
+        // surrounding it on 3 of 4 sides; the empty side is (4,3) — placing
+        // black there captures the white stone.
+        GoBoard b = new GoBoard(9);
+        b.squares[b.sq(3, 3)] = GoBoard.WHITE;
+        b.squares[b.sq(2, 3)] = GoBoard.BLACK;
+        b.squares[b.sq(3, 2)] = GoBoard.BLACK;
+        b.squares[b.sq(3, 4)] = GoBoard.BLACK;
+        // The empty intersection (4,3) is the white stone's only liberty.
+        // black to move.
+        b.sdPlayer = 0;
+        String fen = V9.toFen(b);
+        Move a = V9.searchBestMove(fen, 1, 100);
+        // AI must take the capture at (4,3).
+        assertEquals(b.sq(4, 3), a.src());
     }
 
     // ---- Scoring ----

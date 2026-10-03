@@ -26,18 +26,19 @@ public final class BoardMessages {
         // without the GUI.
         player.sendSystemMessage(Component.literal(CChessUtil.boardToAscii(session.getChessData())));
         int role = session.getPlayerRole(player.getUUID());
-        String turn = session.getSdPlayer() == 0 ? "红方" : "黑方";
-        String suffix;
+        Component turn = Component.translatable(session.getSdPlayer() == 0
+                ? "qisheng.chess.role.red" : "qisheng.chess.role.black");
+        Component suffix;
         if (session.getState() != GameState.PLAYING) {
-            suffix = "(" + session.getState() + ")";
+            suffix = Component.literal("(" + session.getState() + ")");
         } else if (role < 0) {
-            suffix = "(旁观;" + turn + "走子)";
+            suffix = Component.translatable("qisheng.chess.turn.spectating", turn);
         } else if (role == session.getSdPlayer()) {
-            suffix = "← 你走子";
+            suffix = Component.translatable("qisheng.chess.turn.your_move");
         } else {
-            suffix = "(等待;" + turn + "走子)";
+            suffix = Component.translatable("qisheng.chess.turn.waiting", turn);
         }
-        Component msg = Component.literal("轮到 " + turn + suffix);
+        Component msg = Component.translatable("qisheng.chess.turn.label", turn).append(suffix);
         // Route through popup so it shows as an in-GUI overlay rather than
         // a chat line — players opening the GUI won't miss it.
         GameBroadcaster.broadcastPopupTo(player, msg);

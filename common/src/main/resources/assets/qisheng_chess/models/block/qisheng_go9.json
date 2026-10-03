@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "down": "minecraft:block/oak_planks",
+    "up": "qisheng_chess:block/qisheng_go9_top",
+    "north": "minecraft:block/oak_planks",
+    "south": "minecraft:block/oak_planks",
+    "east": "minecraft:block/oak_planks",
+    "west": "minecraft:block/oak_planks",
+    "particle": "minecraft:block/oak_planks"
+  }
+}

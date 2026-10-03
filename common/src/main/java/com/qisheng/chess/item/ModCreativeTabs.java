@@ -45,5 +45,8 @@ public final class ModCreativeTabs {
      */
     public static void populateTabs() {
         CreativeTabRegistry.appendStack(CCHESS_TAB, () -> new ItemStack(ModItems.CCHESS.get()));
+        CreativeTabRegistry.appendStack(CCHESS_TAB, () -> new ItemStack(ModItems.GOMOKU.get()));
+        CreativeTabRegistry.appendStack(CCHESS_TAB, () -> new ItemStack(ModItems.GO9.get()));
+        CreativeTabRegistry.appendStack(CCHESS_TAB, () -> new ItemStack(ModItems.GO19.get()));
     }
 }

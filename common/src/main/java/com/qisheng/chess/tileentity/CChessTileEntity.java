@@ -66,6 +66,18 @@ public class CChessTileEntity extends BlockEntity {
 
         GameSession live = sm.get(key);
         if (live != null) {
+            // Apply the block's preferred variant to a still-default live session.
+            // This happens when {@link AbstractChessBoardBlock#onPlace} has already
+            // created the session with DEFAULT_ID via SessionManager.getOrCreate
+            // (before the block's variant ID was known to the session), and a
+            // first-time right-click arrives shortly after. Without this branch
+            // a freshly-placed gomoku/go9/go19 board would silently stay as
+            // xiangqi — because the live check at the top short-circuits before
+            // the preferred-variant logic runs further down.
+            if (preferredVariantId != null && !preferredVariantId.isEmpty()
+                    && BoardRegistry.DEFAULT_ID.equals(live.getVariantId())) {
+                live.setVariantId(preferredVariantId);
+            }
             restored = null;
             return live;
         }

@@ -13,7 +13,7 @@ Minecraft 1.20.1 的**棋类 PVP 模组**(Fabric)。放下一张棋盘方块,右
 
 - 模组 ID:`qisheng_chess`
 - 方块:`qisheng_chess:cchess`(中国象棋)/ `qisheng_chess:gomoku`(五子棋)/ `qisheng_chess:go9`(围棋 9 路)/ `qisheng_chess:go19`(围棋 19 路)
-- 当前版本:`0.4.2`
+- 当前版本:`0.4.3`
 - 平台:**仅 Fabric**。NeoForge 模块已于 v0.1.2 移除(它此前处于半删除状态,源码语法都不完整)。
 
 ---

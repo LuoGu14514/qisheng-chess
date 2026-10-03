@@ -825,3 +825,74 @@ v0.4 引入围棋时用单个方块 + `BOARD_SIZE` BlockState 切换 9/19 尺寸
 - 走子动画（用户没要求）
 - 服务端没有实机验证（容器限制）
 
+---
+
+## 13. v0.4.3 — 资源补齐 + 修 onPlace 抢跑导致象棋 fallback 失效（执行记录）
+
+### 13.1 用户反馈
+
+实测 v0.4.2 后报怨三个问题（m05737）：
+
+1. **创造物品栏只有象棋**——gomoku/go9/go19 不显示。
+2. **其他棋盘没材质**——看起来是默认紫黑 missing-model。
+3. **`/give` 拿到其他棋盘后右键打开仍是象棋**。
+
+### 13.2 根因分析
+
+| 问题 | 根因 |
+|---|---|
+| 1 | `ModCreativeTabs.populateTabs()` 只 append 了 CCHESS 一个 BlockItem,gomoku/go9/go19 没进创造 tab。 |
+| 2 | v0.4 引入 gomoku/go9/go19 时只注册了 Block/BlockItem,**没补 blockstates/*.json / models/block/*.json / models/item/*.json / textures/**。没有 model 就当 missing-model 渲染（紫黑）；没有 item model 创造 tab 里也不显示。 |
+| 3 | `AbstractChessBoardBlock.onPlace` 调 `SessionManager.getOrCreate(pos)` 创建会话**不带 variant ID** → 新会话 `variant = DEFAULT_ID("xiangqi")`。之后用户右键 → `CChessTileEntity.ensureSession(preferredVariantId="gomoku")`,但 `if (live != null) return live` 直接 return,**无视 preferredVariantId** → 围棋方块绑象棋会话。 |
+
+### 13.3 文件清单
+
+#### 新文件（资源 + 工具）
+
+| 路径 | 用途 |
+|---|---|
+| `common/.../resources/.../blockstates/gomoku.json` + `go9.json` + `go19.json` | 3 个 blockstate,每个 `"" → qisheng_chess:block/qisheng_<name>"`。 |
+| `common/.../resources/.../models/block/qisheng_gomoku.json` + `qisheng_go9.json` + `qisheng_go19.json` | 3 个 block model,`parent: minecraft:block/cube`,up 用各自 `_top.png`,其余 6 面 oak_planks（跟 cchess 一致）。 |
+| `common/.../resources/.../models/item/gomoku.json` + `go9.json` + `go19.json` | 3 个 item model,`parent: item/generated`,layer0 用各自 item PNG。 |
+| `common/.../resources/.../textures/block/qisheng_gomoku_top.png` | 256×256,暖色木纹 + 15×15 网格 + 5 星。 |
+| `common/.../resources/.../textures/block/qisheng_go9_top.png` | 256×256,深色木纹 + 9×9 网格 + 4 星。 |
+| `common/.../resources/.../textures/block/qisheng_go19_top.png` | 256×256,深色木纹 + 19×19 网格 + 9 星（标准 9 星布局）。 |
+| `common/.../resources/.../textures/item/gomoku.png` + `go9.png` + `go19.png` | 3 个 16×16 简化版——边框 + 网格 + 中心一颗星。 |
+| `scripts/generate_board_textures.py` | Pillow 程序生成器,6 张 PNG 都从这里出。 |
+
+#### 修改文件
+
+| 路径 | 变更 |
+|---|---|
+| `common/.../item/ModCreativeTabs.java` | `populateTabs` append GOMOKU + GO9 + GO19。 |
+| `common/.../tileentity/CChessTileEntity.java` | `ensureSession(String)` 在 live 分支也应用 preferredVariantId——如果 live variant 还是 DEFAULT_ID 就 `setVariantId(preferredVariantId)`。 |
+| `gradle.properties` | `mod_version=0.4.2 → 0.4.3`。 |
+| `CHANGELOG.md` | 顶部加 `[0.4.3]` 章节（资源补齐 + bugfix 详情）。 |
+| `README.md` | 当前版本 0.4.2 → 0.4.3。 |
+
+### 13.4 关键设计决策
+
+- **不改 onPlace 删 `getOrCreate`**:删除会破坏"服务器一重启,棋盘就废"的旧 case（见 `CChessTileEntity.java:31-33` 注释）。在 ensureSession 修比在 onPlace 改更稳——同时覆盖 onPlace 抢跑创建 + onPlace 没创建两种情况。
+- **restored session 优先级不变**:restored（从 tile entity NBT 读回的）> preferred。存档里存的 variant 不被方块类型覆盖，避免"把 19 路棋盘拆掉、放 9 路方块在同一个坐标,旧 19 路对局数据被覆盖成空 9 路棋盘"。
+- **item 纹理 16×16 而不是 32×32**:跟 cchess 的 `item/cchess.png` 一致。简化版只画网格 + 一个中心星,物品栏里能看出棋盘样式就行,不要资源浪费在 32×32 上。
+- **侧面复用 `oak_planks`** 而不是另外画侧面板:跟 cchess 一致(它的侧面也是 oak_planks),玩家靠**顶面纹理**区分棋种。这样只多画 3 张顶面 + 3 张 item 16×16 = 6 张 PNG,共 +140 KB。
+
+### 13.5 测试
+
+纯资源 + 行为 bugfix,没改变种/AI/规则逻辑 → 没加测试。v0.4.1 的 128 tests 全部继续 PASS。
+
+### 13.6 构建
+
+- `:common:compileJava :common:test :fabric:remapJar` → BUILD SUCCESSFUL,128 tests PASSED。
+- jar = `qisheng_chess-fabric-0.4.3.jar` 387548 B（vs 0.4.2 = 246637 B,+140911 B = 程序生成的 6 张 PNG 纹理）。
+- 部署:删除 `mods/qisheng_chess-fabric-0.4.2.jar`,复制 0.4.3 到 `D:\PCL 正式版 2.12.6\89\.minecraft\versions\1.20.1-Fabric 0.19.5\mods\`。
+
+### 13.7 仍存留（v0.4.4+ 候选）
+
+- 资源补齐后用户需实测三问题是否真的修好（容器无 LWJGL Display,只能等用户报怨）
+- 五子棋 / 围棋 GUI 无坐标引导（用户没要求）
+- 围棋无 superko（用户没要求）
+- 国际象棋 AI 1-ply 无 alpha-beta（用户接受"无复杂功能"）
+- 走子动画（用户没要求）
+- 服务端没有实机验证（容器限制）
+

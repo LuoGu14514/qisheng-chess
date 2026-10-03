@@ -5,6 +5,58 @@
 
 ---
 
+## [0.4.3] — 补齐 v0.4.2 资源 + 修 onPlace 抢跑导致象棋 fallback 失效
+
+目标：用户实测 v0.4.2 反馈三个问题——创造物品栏只有象棋、其他棋盘没材质、`/give` 拿到 gomoku/go9/go19 后右键打开仍是象棋。三个问题全部由 v0.4 的资源遗漏 + v0.4.2 的会话初始化路径 bug 导致。
+
+### 变更
+
+#### 资源补齐
+
+- **新增 3 个 blockstate**：`blockstates/gomoku.json` / `go9.json` / `go19.json`，每条 `"" → qisheng_chess:block/qisheng_<name>` 单 variant。
+- **新增 3 个 block model**：`models/block/qisheng_gomoku.json` / `qisheng_go9.json` / `qisheng_go19.json`，每个走 `minecraft:block/cube` 父模型 + 顶面 `_top.png` + 6 面复用 `oak_planks`（跟 cchess 一致，玩家靠顶面纹理区分棋种）。
+- **新增 3 个 item model**：`models/item/gomoku.json` / `go9.json` / `go19.json`，走 `item/generated` 父模型 + `layer0`。
+- **新增 6 张程序生成纹理**（`scripts/generate_board_textures.py` + Pillow）：
+  - `textures/block/qisheng_gomoku_top.png` (256×256)：暖色木纹 + 15×15 网格 + 5 星。
+  - `textures/block/qisheng_go9_top.png` (256×256)：深色木纹 + 9×9 网格 + 4 星。
+  - `textures/block/qisheng_go19_top.png` (256×256)：深色木纹 + 19×19 网格 + 9 星（标准 9 星布局）。
+  - `textures/item/gomoku.png` / `go9.png` / `go19.png` (16×16)：简化版顶视图——边框 + 网格 + 中心一颗星。
+
+#### 创造 tab 补齐
+
+- `ModCreativeTabs.populateTabs()` 之前只 append 了 `CCHESS` 一个 BlockItem，导致 `GOMOKU` / `GO9` / `GO19` 即便注册了 BlockItem 也进不了创造物品栏。补三个 `appendStack` 调用。
+
+#### 关键 bugfix：`CChessTileEntity.ensureSession` 抢跑
+
+- **根因**：`AbstractChessBoardBlock.onPlace` 调用 `SessionManager.getOrCreate(pos)` 创建会话，但**不带 variant ID**——结果新建会话的 variant = `DEFAULT_ID` ("xiangqi")。随后用户右键 → `CChessTileEntity.ensureSession(preferredVariantId="gomoku")` 被调用，但此时 live session 已经存在，函数第一段 `if (live != null) return live` 直接 return，**完全无视 preferredVariantId**。结果：一个围棋方块绑了象棋会话。
+- **修复**：在 `live != null` 分支也补 preferredVariantId 应用——如果 live variant 仍是 `DEFAULT_ID`，`setVariantId(preferredVariantId)` 覆盖它。restored session 优先级不变（restored > preferred，存档里存的 variant 不被方块类型覆盖）。
+- **为什么不改 onPlace**：`onPlace` 里的 `getOrCreate` 删掉会破坏"服务器一重启, 棋盘就废了"的旧 case（CChessTileEntity.java:31-33 的注释解释）。在 ensureSession 修覆盖两种情况——onPlace 抢跑创建 + onPlace 没创建——更稳。
+
+### 测试
+
+没有新功能，没有新变种/AI/规则逻辑改动 → 没加测试。128 tests 全部继续 PASS。
+
+### 文件表
+
+| 文件 | 说明 |
+|---|---|
+| `common/.../resources/.../blockstates/gomoku.json` + `go9.json` + `go19.json` | 新增。每个 `"" → qisheng_chess:block/qisheng_<name>`。 |
+| `common/.../resources/.../models/block/qisheng_gomoku.json` + `qisheng_go9.json` + `qisheng_go19.json` | 新增。`parent: minecraft:block/cube`，up 用各自 _top.png，其余 6 面 oak_planks。 |
+| `common/.../resources/.../models/item/gomoku.json` + `go9.json` + `go19.json` | 新增。`parent: item/generated`，layer0 用各自 item PNG。 |
+| `common/.../resources/.../textures/block/qisheng_gomoku_top.png` + `qisheng_go9_top.png` + `qisheng_go19_top.png` | 新增。256×256。 |
+| `common/.../resources/.../textures/item/gomoku.png` + `go9.png` + `go19.png` | 新增。16×16。 |
+| `scripts/generate_board_textures.py` | 新增。Pillow 程序生成器。 |
+| `common/.../item/ModCreativeTabs.java` | populateTabs append 三个新 BlockItem。 |
+| `common/.../tileentity/CChessTileEntity.java` | ensureSession 在 live 分支也应用 preferredVariantId。 |
+| `gradle.properties` | `mod_version=0.4.2 → 0.4.3`。 |
+
+### 构建
+
+- `:common:compileJava :common:test :fabric:remapJar` → BUILD SUCCESSFUL，128 tests PASSED。
+- jar = `qisheng_chess-fabric-0.4.3.jar` 387548 B（vs 0.4.2 = 246637 B，+140911 B = 程序生成的 6 张 PNG 纹理）。
+
+---
+
 ## [0.4.2] — 围棋拆成两个独立方块
 
 目标：回应 v0.4.1 之后的用户反馈（"围棋提供两个棋盘"）—— 把 v0.4 引入的单方块 + `BOARD_SIZE` BlockState 改成两个独立方块，物品栏里能直接看到 9 路 / 19 路两个 BlockItem。

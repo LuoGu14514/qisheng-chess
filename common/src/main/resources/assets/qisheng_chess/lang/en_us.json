@@ -1,6 +1,10 @@
 {
   "block.qisheng_chess.cchess": "Chinese Chess Board",
   "item.qisheng_chess.cchess": "Chinese Chess Board",
+  "block.qisheng_chess.gomoku": "Gomoku Board",
+  "item.qisheng_chess.gomoku": "Gomoku Board",
+  "block.qisheng_chess.go": "Go Board",
+  "item.qisheng_chess.go": "Go Board",
   "itemGroup.qisheng_chess": "Qisheng Chess",
 
   "qisheng.chess.action.chat": "Comment / Chat",
@@ -125,5 +129,10 @@
   "qisheng.chess.cmd.mode.label_pvp": "PVP",
   "qisheng.chess.cmd.mode.label_pvc": "PVC",
   "qisheng.chess.screen.variant.international.placeholder.line1": "International chess — server engine ready",
-  "qisheng.chess.screen.variant.international.placeholder.line2": "GUI renderer will ship in v0.3.2 (8×8 board + promotion + castling)"
+  "qisheng.chess.screen.variant.international.placeholder.line2": "GUI renderer will ship in v0.3.2 (8×8 board + promotion + castling)",
+  "qisheng.chess.variant.xiangqi": "Chinese Chess",
+  "qisheng.chess.variant.international": "International Chess",
+  "qisheng.chess.variant.gomoku": "Gomoku",
+  "qisheng.chess.variant.go9": "Go (9×9)",
+  "qisheng.chess.variant.go19": "Go (19×19)"
 }

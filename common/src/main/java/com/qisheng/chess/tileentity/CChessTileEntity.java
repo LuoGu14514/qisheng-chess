@@ -1,5 +1,6 @@
 package com.qisheng.chess.tileentity;
 
+import com.qisheng.chess.engine.BoardRegistry;
 import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.SessionManager;
@@ -49,13 +50,22 @@ public class CChessTileEntity extends BlockEntity {
      * @return 该棋盘的会话;仅当自身不在服务端时返回 {@code null}
      */
     public GameSession ensureSession() {
+        return ensureSession(null);
+    }
+
+    /**
+     * 取得本棋盘的对局,并在新建时按 {@code preferredVariantId} 打上棋种标签
+     * (v0.4 起,棋盘方块决定棋种;xiangqi / international / gomoku / go9 /
+     * go19)。已有会话或存档恢复时,棋种由存档中的 {@code Variant} 字段决定,
+     * 这个参数仅作"新建"路径的提示 —— 避免新放置的围棋方块意外开一局象棋。
+     */
+    public GameSession ensureSession(String preferredVariantId) {
         if (!(level instanceof ServerLevel serverLevel)) return null;
         BoardKey key = BoardKey.of(serverLevel, worldPosition);
         SessionManager sm = SessionManager.get();
 
         GameSession live = sm.get(key);
         if (live != null) {
-            // A reloaded chunk carries a stale snapshot; the live game wins.
             restored = null;
             return live;
         }
@@ -64,7 +74,12 @@ public class CChessTileEntity extends BlockEntity {
             restored = null;
             return adopted;
         }
-        return sm.getOrCreate(key);
+        GameSession fresh = sm.getOrCreate(key);
+        if (preferredVariantId != null && !preferredVariantId.isEmpty()
+                && BoardRegistry.DEFAULT_ID.equals(fresh.getVariantId())) {
+            fresh.setVariantId(preferredVariantId);
+        }
+        return fresh;
     }
 
     /**

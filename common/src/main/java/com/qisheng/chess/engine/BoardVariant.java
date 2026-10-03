@@ -69,6 +69,23 @@ public interface BoardVariant {
     /** True if {@code sq} is a valid square index for this variant. */
     boolean isValidSquare(int sq);
 
+    /**
+     * Variant-local square index for {@code (file, rank)} with
+     * {@code 0 ≤ file < boardFiles()} and {@code 0 ≤ rank < boardRanks()}.
+     *
+     * <p>The encoding is variant-defined. Xiangqi maps to a 256-element padded
+     * coordinate; international chess uses {@code file + rank*8}; the gomoku
+     * and go variants use {@code file + rank*files}. Callers that need the
+     * inverse use {@link #fileOf} and {@link #rankOf}.
+     */
+    int indexForFileRank(int file, int rank);
+
+    /** File (column) component of a variant-local square index. */
+    int fileOf(int sq);
+
+    /** Rank (row) component of a variant-local square index. */
+    int rankOf(int sq);
+
     /** Piece byte at sq, or {@code 0} for empty / off-board. */
     byte pieceAt(BoardState state, int sq);
 

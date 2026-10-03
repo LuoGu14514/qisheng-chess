@@ -1,5 +1,7 @@
 package com.qisheng.chess.engine;
 
+import com.qisheng.chess.engine.go.GoVariant;
+import com.qisheng.chess.engine.gomoku.GomokuVariant;
 import com.qisheng.chess.engine.international.InternationalChessVariant;
 import com.qisheng.chess.engine.xiangqi.XiangqiVariant;
 
@@ -35,6 +37,9 @@ public final class BoardRegistry {
         Map<String, BoardVariant> m = new LinkedHashMap<>();
         register(m, new XiangqiVariant());
         register(m, new InternationalChessVariant());
+        register(m, new GomokuVariant());
+        register(m, GoVariant.GO_9);
+        register(m, GoVariant.GO_19);
         VARIANTS = Collections.unmodifiableMap(m);
     }
 

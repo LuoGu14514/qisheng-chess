@@ -55,6 +55,18 @@ public final class XiangqiVariant implements BoardVariant {
         return ChineseChessEngine.isSquare(sq);
     }
 
+    @Override public int indexForFileRank(int file, int rank) {
+        return Position.COORD_XY(file + Position.FILE_LEFT, rank + Position.RANK_TOP);
+    }
+
+    @Override public int fileOf(int sq) {
+        return (sq & 0xF) - Position.FILE_LEFT;
+    }
+
+    @Override public int rankOf(int sq) {
+        return ((sq >> 4) & 0xF) - Position.RANK_TOP;
+    }
+
     @Override public byte pieceAt(BoardState state, int sq) {
         if (!(state instanceof Position pos)) return 0;
         return ChineseChessEngine.pieceAt(pos, sq);

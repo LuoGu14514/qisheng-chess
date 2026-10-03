@@ -24,5 +24,8 @@ runs/
 Thumbs.db
 .DS_Store
 
+# SSH known_hosts accidentally picked up by git add on Windows
+known_hosts
+
 # Internal docs (keep development history local)
 PLAN.md

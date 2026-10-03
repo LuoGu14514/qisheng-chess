@@ -254,6 +254,7 @@ org.gradle.java.installations.auto-download=false
 - `[qisheng]` admin 反馈 — **v0.2.1 已落地**:`ModCommands.doPurge/doMove/doSelect` 三处 `Component.literal("[qisheng] ...")` → `translatable`,lang 文件 119→122 键对称。
 - 实机验证 — 容器无 LWJGL Display 与 EULA TTY,无法跑 MC client/server。
 - **v0.3.1 (2026-10-02 末轮 + 引擎抽象 + 国际象棋)**:BoardVariant 注册表 + XiangqiVariant 迁移 + InternationalChessVariant 完整 FIDE 规则 + variant-aware 重构(GameSession / GameLogic / GameBroadcaster / PvcController)+ 网络协议末尾 1 字节 variantId + CChessBoardScreen 国际象棋占位提示;测试 60→**79**(XiangqiVariantTest 9 + InternationalChessVariantTest 11 + LegalDestsBitmapTest 6)全绿。详见 §9。
+- **v0.4.0 (2026-10-03 + 五子棋 + 围棋 + 独立方块)**:在 v0.3.1 引擎抽象之上新增 5 个 BoardVariant(xiangqi/international/gomoku/go9/go19);抽 `AbstractChessBoardBlock` 基类,新建 `GomokuBoardBlock` + `GoBoardBlock`(围棋方块支持 `[size=9|19]` BlockState);`GameSession.boardState` 字段重构成 variant-specific,`getChessData()` 走 `instanceof Position` fallback;`CChessTileEntity.ensureSession(String)` overload 让新会话继承方块 variantId;`CChessBoardScreen` 全 variant-aware: `cols()/rows()` 动态 + 简化五子棋 / 围棋渲染 + 共享 `drawStone`;测试 79→**119**(GomokuVariantTest 19 + GoVariantTest 21 + 旧 79)全绿;lang 122→133 键对称(5 变种显示名 + 3 方块/物品名)。详见 §10。
 
 ---
 
@@ -588,4 +589,97 @@ BUILD SUCCESSFUL 23s (4 executed, 8 up-to-date)
 - **国际象棋引擎无 alpha-beta**：搜索只是 `firstLegalMove` wrapper，v0.3.2 引入 negamax + transposition table。
 - **协议 variantId 字段加在 buf 末尾**：旧 v0.6 客户端读 `readUtf()` 会 EOFException，已加 try/catch 兜底。
 - **服务端没有实机验证**（容器无 LWJGL Display + 无 EULA TTY）—— 国际象棋 / 占位 GUI 真实表现以实机为准。
+
+---
+
+## 10. v0.4.0 — 五子棋 + 围棋 + 独立方块（执行记录）
+
+### 10.1 文件清单
+
+#### 新文件
+
+| 路径 | 用途 |
+|---|---|
+| `common/.../block/AbstractChessBoardBlock.java` | 抽 use / onPlace / onRemove / FACING / rotate / mirror / newBlockEntity 共享逻辑; abstract `getVariantId()`; 3 个静态属性 helper |
+| `common/.../block/GomokuBoardBlock.java` | 五子棋棋盘方块, `extends AbstractChessBoardBlock` |
+| `common/.../block/GoBoardBlock.java` | 围棋棋盘方块, `BOARD_SIZE = IntegerProperty.create("size", 9, 19)`, `getVariantId(BlockState)` 按 size 路由 |
+| `common/.../engine/gomoku/GomokuBoard.java` | 五子棋状态: `byte[225]`, `sdPlayer`, `moveCount`, `winner` |
+| `common/.../engine/gomoku/GomokuVariant.java` | 15×15 规则, FEN dialect `<15 ranks> <turn>`, 5+ 胜 |
+| `common/.../engine/go/GoBoard.java` | 围棋状态: `byte[size*size]`, `sdPlayer`, `blackCaptures/whiteCaptures`, `koSquare`, `passes`, `finished` |
+| `common/.../engine/go/GoVariant.java` | 9 路 + 19 路两个静态实例, KOMI=7.5, 中国数子, 自杀禁手, 简版 ko |
+| `common/src/test/.../engine/gomoku/GomokuVariantTest.java` | 19 条用例 |
+| `common/src/test/.../engine/go/GoVariantTest.java` | 21 条用例 |
+
+#### 修改文件
+
+| 路径 | 变更 |
+|---|---|
+| `common/.../engine/BoardVariant.java` | 加 3 helper: `indexForFileRank(file, rank)` / `fileOf(sq)` / `rankOf(sq)` |
+| `common/.../engine/BoardRegistry.java` | 注册 5 变体 (xiangqi + international + gomoku + go9 + go19) |
+| `common/.../engine/xiangqi/XiangqiVariant.java` | 实现 3 helper (走 Position.COORD_XY) |
+| `common/.../engine/international/InternationalChessVariant.java` | 实现 3 helper (走 IntChessBoard.sq) |
+| `common/.../block/CChessBoardBlock.java` | 瘦身到 15 行, `extends AbstractChessBoardBlock` |
+| `common/.../block/ModBlocks.java` | 注册 CCHESS + GOMOKU + GO |
+| `common/.../block/ModBlockEntities.java` | 单 `BlockEntityType` 绑定 3 个 Block |
+| `common/.../tileentity/CChessTileEntity.java` | `ensureSession(String preferredVariantId)` overload |
+| `common/.../pvp/GameSession.java` | `boardState: BoardState` 字段 + `getChessData()` instanceof fallback |
+| `common/.../command/ModCommands.java` | doSelect / doReset / doLeave 改走 variant API |
+| `common/.../client/CChessBoardScreen.java` | GUI variant-aware (cols/rows 动态 + 简化五子棋 / 围棋渲染) |
+| `common/.../lang/zh_cn.json` + `en_us.json` | 加 5 变种名 + 3 方块名 (122→133 键) |
+| `gradle.properties` | `mod_version=0.3.1 → 0.4.0` |
+
+### 10.2 关键设计
+
+#### 抽象方块基类 vs 三个具体子类
+
+- `AbstractChessBoardBlock` 抽共享 use/onPlace/onRemove/FACING/rotate/mirror/newBlockEntity/Properties 帮助。三个具体子类只实现 `getVariantId()` (and GoBoardBlock 多一个 `getVariantId(BlockState)` 按 size 路由)。
+- `ModBlocks` 用同一 `Block.Properties` 模式: `mapColor + strength(2.0f) + sound(WOOD) + noOcclusion()`。围棋 / 五子棋换不同的 mapColor 让方块在世界里有视觉区分。
+
+#### GameSession 重构
+
+- `private final Position chessData` → `private BoardState boardState` (variant-specific)。
+- `getChessData()` 改为 `return boardState instanceof Position p ? p : null` — xiangqi 路径保留兼容, 其它变种返 null。
+- `setVariantId(id)` 在变种变化时重置 boardState。
+- `save()` / `fromTag()` 走 `variant.toFen / variant.parseState`。
+- `checkGameOver()` 走 v.isCheckmate + xiangqi 走 isRepeat/reachMoveLimit + international 走 halfmoveClock>=100 + v.isStalemate。
+
+#### GUI 简化渲染
+
+- 五子棋: 15×15 网格 + 黑/白圆子, 无坐标、无提示窗。
+- 围棋: 网格 + star points (9×9 中心 / 19×19 9 点) + 黑/白圆子。
+- 单击路由: xiangqi 选子→落子两步, 五子棋/围棋 单击直接 `ACTION_MOVE(src==dst)` (placement semantics)。
+- `drawStone` 共享工具: 黑/白圆子 + 灰色描边。
+
+### 10.3 测试
+
+| 测试类 | 用例数 |
+|---|---|
+| engine.gomoku.GomokuVariantTest | 19 |
+| engine.go.GoVariantTest | 21 |
+| engine.international.InternationalChessVariantTest | 11 |
+| engine.xiangqi.XiangqiVariantTest | 10 |
+| engine.ChineseChessEngineTest | 8 |
+| engine.xqwlight.PositionTest | 11 |
+| engine.xqwlight.SearchTimeBudgetTest | 5 |
+| network.LegalDestsBitmapTest | 6 |
+| pvp.GameSessionPersistenceTest | 13 |
+| pvp.PvcGameLoopTest | 15 |
+| **总计** | **119** |
+
+- 119 tests PASSED, 0 failures, 0.954s。
+- 关键测试: Gomoku 4 方向 5 连 (H/V/diag1/diag2), Go 9+19 不同 size 复用同一 API, 自杀禁手, 简单 ko guard, 2 passes 终止游戏, scoreDelta 中国数子规则。
+
+### 10.4 验收
+
+- `gradlew.bat :common:compileJava :common:test :fabric:compileJava :fabric:remapJar` → **BUILD SUCCESSFUL 21s**。
+- jar = `qisheng_chess-fabric-0.4.0.jar` = 239416 B (vs 0.3.1 = 239271 B, +145 B)。
+
+### 10.5 v0.4.0 仍未决（v0.4.2 路线）
+
+- **五子棋 / 围棋 GUI 是简化功能性渲染**：无坐标引导、无禁手标记（Renju / Sanrensei）、无走法计数、无计时器；下一步 (v0.4.2) 加星位高亮 + 禁手点红 + last-move 标记。
+- **PVC 电脑仅五子棋 / 围棋 / 国际象棋都是 `firstLegalMove`**：真要下出水平得引入 alpha-beta (国际象棋) / pattern-based defense (五子棋) / heuristic scoring (围棋)。v0.4.2 引入五子棋 AI (3-move threat space search)。
+- **围棋 GUI 无 pass 按钮**：当前 `applyPass` 走 `Move(-1,-1)` sentinel 但 GUI 没有"虚着"按钮；v0.4.2 在 action panel 加 pass。
+- **围棋无 superko**：当前仅简单 ko (上一个落子位置回放禁手)；v0.4.2 引入 positional superko (重复局面禁手)。
+- **服务端没有实机验证**：容器无 LWJGL Display + 无 EULA TTY —— 五子棋 / 围棋实际表现以实机为准。
+- **国际象棋 GUI 仍占位提示**（v0.3.1 仍未决）：完整 64 格 + 升变选择器 / 走法预览留待 v0.4.2 + v0.5.0。
 

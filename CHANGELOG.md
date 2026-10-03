@@ -5,6 +5,79 @@
 
 ---
 
+## [0.4.0] — 五子棋 + 围棋 + 独立方块
+
+目标：在 v0.3.1 引擎抽象之上引入两类新棋（五子棋 15×15、围棋 9 路 / 19 路），并为每个棋类提供独立方块。游戏逻辑完全 variant-aware；GUI 提供功能性的简化渲染（无 AI、无高亮、无坐标引导）。
+
+### 变更
+
+#### 新 BoardVariant 实现
+
+- `engine/gomoku/GomokuBoard` (50 行): `byte[225]` 棋盘 (0=空, 1=黑, 2=白), `sdPlayer`, `moveCount`, `winner`。
+- `engine/gomoku/GomokuVariant` (~280 行): 15×15, FEN dialect `<15 ranks> <turn>`, `canMove` 要求 `src==dst` + 空 + winner==0, `applyMove` 落子 + 翻转 + `detectWinner` (4 方向 H/V/diag1/diag2, 5+ 胜, Renju 接受 overline); `isCheckmate = winner!=0`, `isStalemate = board 满且 winner==0`; `searchBestMove = firstLegalMove` (v0.4 简化版, 真实 AI 待后续); `legalDestsBitmapSize = 29`。
+- `engine/go/GoBoard` (64 行): `byte[size*size]` 棋盘, `sdPlayer`, `blackCaptures / whiteCaptures`, `koSquare = -1`, `passes`, `finished`。
+- `engine/go/GoVariant` (~489 行): 静态实例 `GO_9` (id="go9", 9×9) + `GO_19` (id="go19", 19×19), KOMI=7.5, FEN dialect `<rows> <side> <passes> <koSq> <bCap> <wCap>`; 完整 placement + flood-fill capture + suicide 禁止 + 简单 ko square; `applyPass` 走 `Move(-1,-1)` sentinel; `isCheckmate = finished` (2 passes 后); `scoreDelta` 走中国数子规则。
+- `BoardRegistry` 注册 5 个变体: xiangqi + international + gomoku + go9 + go19。
+
+#### BoardVariant 接口扩展
+
+- 新增 3 个 helper 方法 `indexForFileRank(file, rank)` / `fileOf(sq)` / `rankOf(sq)` — GUI 不再写 `if (variantId == "international")` 硬编码分支，全部走 variant 描述子。
+- `XiangqiVariant.indexForFileRank = Position.COORD_XY(file+3, rank+3)`, `fileOf = (sq & 0xF) - 3`, `rankOf = ((sq>>4)&0xF) - 3`。
+- `InternationalChessVariant.indexForFileRank = IntChessBoard.sq(file,rank)`, `fileOf = sq & 7`, `rankOf = sq >>> 3`。
+- `GomokuVariant.indexForFileRank = file + rank*15`, `fileOf = sq % 15`, `rankOf = sq / 15`。
+- `GoVariant` 按 size 计算 (`indexForFileRank = file + rank*size`)。
+
+#### 抽象方块基类
+
+- 新增 `block/AbstractChessBoardBlock`: 抽取 `use / onPlace / onRemove / FACING / rotate / mirror / newBlockEntity` 共享逻辑; abstract `getVariantId()` + `getVariantId(BlockState)` 默认调无参版; `resetFinishedBoard` 静态方法; 3 个静态属性 helper: `xiangqiProperties()` / `gomokuProperties()` / `goProperties()` (mapColor + strength + sound + noOcclusion)。
+- `CChessBoardBlock` (15 行): `extends AbstractChessBoardBlock`, `VARIANT_ID = "xiangqi"`。
+- `block/GomokuBoardBlock` (30 行): `extends AbstractChessBoardBlock`, `VARIANT_ID = "gomoku"`, 用 `gomokuProperties()`。
+- `block/GoBoardBlock` (90 行): `extends AbstractChessBoardBlock`, `VARIANT_PREFIX = "go"`, `BOARD_SIZE = IntegerProperty.create("size", 9, 19)`, `getVariantId(BlockState)` 按 `state.getValue(BOARD_SIZE)` 路由到 `GO_9 / GO_19`。
+- `ModBlocks`: 注册 `CCHESS + GOMOKU + GO` 三个 `DeferredRegister.Supplier`。
+- `ModBlockEntities`: 单一 `BlockEntityType` 绑定 3 个 Block (`CCHESS + GOMOKU + GO`) 共享 `CChessTileEntity`。
+
+#### GameSession 重构
+
+- `private final Position chessData` → `private BoardState boardState` (variant-specific)。
+- 构造器 `setVariantId(BoardRegistry.DEFAULT_ID)` 触发 `initialState()`。
+- `setVariantId(id)` 在变种变化时重置 `boardState = variant.initialState()`。
+- `getChessData()` 改为 `return boardState instanceof Position p ? p : null` — xiangqi 路径保留兼容, 其它变种返 null (server 端不需要)。
+- `save()` 走 `variant.toFen(boardState)`; `fromTag()` 走 `variant.parseState(fen)` (null fallback)。
+- `checkGameOver()` 走 `v.isCheckmate` + xiangqi 走 `isRepeat / reachMoveLimit` + international 走 `halfmoveClock>=100` + `v.isStalemate`。
+- `CChessTileEntity.ensureSession(String preferredVariantId)` overload — 已有 live/restored 不覆盖; `getOrCreate` 出来的新会话若 `preferredVariantId != null && !empty && 仍是 DEFAULT_ID` 则 `setVariantId(preferredVariantId)`。
+
+#### ModCommands
+
+- `doSelect`: `session.getChessData().squares[sq]` → `session.getVariant().pieceAt(session.getBoardState(), sq)`。
+- `doReset` / `doLeave`: `session.getChessData().fromFen(...)` → `session.setBoardState(session.getVariant().initialState())`。
+- `doBoard`: xiangqi-only ASCII 输出加 fallback 到 `qisheng.chess.cmd.board.non_xiangqi` i18n。
+
+#### GUI 改造 (variant-aware)
+
+- `client/CChessBoardScreen`:
+  - 新增 `variantId / cachedBoardState / cachedVariant` 字段; `boardState()` 走 `variant.parseState(fen)` 缓存。
+  - `cols() / rows()` 从 `variant.boardFiles / boardRanks` 动态取。
+  - `recomputeLayout()` 用动态 cols/rows + cell cap (≥15 列时降到 40)。
+  - `viewFile / viewRank / fenFileFromView / fenRankFromView` 用动态 cols/rows 做翻转。
+  - `legalDestinations()` 改 totalSquares-aware: 服务端位图按 `v.totalSquares()` 决定长度。
+  - `render()` 分支: `xiangqi` 走原 drawGrid + drawRiver + drawPalace + drawPieces; `international` 仍走占位; `gomoku` 走 `drawGomokuBoard`; `go9 / go19` 走 `drawGoBoard`。
+  - 新增 `drawGomokuBoard` (15×15 网格 + 黑/白圆子, 无坐标引导), `drawGoBoard` (网格 + star points 9×9 中心 / 19×19 9 点 + 黑/白圆子), `drawPlacementLastMoveOverlay` (五子棋/围棋最近一手高亮), `drawStarPoints` (hoshi)。
+  - `mouseClicked` / `handleBoardClick` 变种路由: 五子棋/围棋 单击直接 `ACTION_MOVE(src==dst)`, 不走选子→落子两步。
+  - `drawStone` 共享工具: 黑/白圆子 + 灰色描边, 五子棋/围棋 共用。
+
+#### i18n
+
+- 5 个变种显示名: `qisheng.chess.variant.{xiangqi,international,gomoku,go9,go19}` (zh_cn + en_us 各 5 键, 对称 133 键)。
+- 3 个方块/物品名: `block.qisheng_chess.{cchess,gomoku,go}` + `item.qisheng_chess.{cchess,gomoku,go}`。
+
+### 测试
+
+- `engine/gomoku/GomokuVariantTest` (19 条): id / sizes / fenRoundTripInitial / blackPlaysFirst / placementBasics / canMoveRejectsSrcNeqDst / blackWinsHorizontal / whiteWinsVertical / diagonalWin / firstLegalMovePicksFirstEmpty / searchBestMoveIsFirstLegal / noCheckConcept / pieceAndSideAccessors / parseStateRejectsJunk / sdPlayerFlipsCorrectly / pieceFenCharAfterWin / fenRoundTripAfterMove / moveEncodingSafe / stalemateFalseOnEmpty。
+- `engine/go/GoVariantTest` (21 条): idsAndSizes / fenRoundTripInitial / fenRoundTrip19 / blackPlaysFirst / basicPlacementAndSdFlip / suicideForbidden / captureTakesOneStone / twoPassesEndsGame / moveResetsPasses / finishedBoardRejectsMoves / fenRoundTripPreservesState / fenRoundTripPreservesKoSquare / parseStateRejectsJunk / simpleKoGuard / firstLegalMoveEmpty / searchBestMoveIsFirstLegal / pieceAndSideAccessors / differentSizesUseSameApi / pieceFenCharMapping / noCheckConcept / scoreDeltaBasic。
+- 全部 **119 tests passed, 0 failures, 0.954s** (ChineseChessEngineTest 8 + GomokuVariantTest 19 + GoVariantTest 21 + InternationalChessVariantTest 11 + XiangqiVariantTest 10 + PositionTest 11 + SearchTimeBudgetTest 5 + LegalDestsBitmapTest 6 + GameSessionPersistenceTest 13 + PvcGameLoopTest 15)。
+
+---
+
 ## [0.3.1] — 引擎抽象 + 国际象棋
 
 目标：把 v0.3 引擎路线从「单一 xiangqi」扩展为「BoardVariant 注册表 + 第二棋类」，并新增完整可玩的国际象棋子规则。GUI 仅展示「国际象棋 GUI 占位」(v0.3.2 路线)；引擎、协议、持久化全部 variant-aware。

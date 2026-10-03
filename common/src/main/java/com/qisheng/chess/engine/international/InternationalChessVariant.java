@@ -71,6 +71,18 @@ public final class InternationalChessVariant implements BoardVariant {
         return sq >= 0 && sq < 64;
     }
 
+    @Override public int indexForFileRank(int file, int rank) {
+        return IntChessBoard.sq(file, rank);
+    }
+
+    @Override public int fileOf(int sq) {
+        return IntChessBoard.fileOf(sq);
+    }
+
+    @Override public int rankOf(int sq) {
+        return IntChessBoard.rankOf(sq);
+    }
+
     @Override public byte pieceAt(BoardState state, int sq) {
         if (!(state instanceof IntChessBoard b)) return 0;
         return isValidSquare(sq) ? b.squares[sq] : 0;

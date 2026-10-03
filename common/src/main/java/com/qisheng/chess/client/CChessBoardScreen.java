@@ -1,6 +1,11 @@
 package com.qisheng.chess.client;
 
+import com.qisheng.chess.engine.BoardRegistry;
+import com.qisheng.chess.engine.BoardState;
+import com.qisheng.chess.engine.BoardVariant;
 import com.qisheng.chess.engine.ChineseChessEngine;
+import com.qisheng.chess.engine.gomoku.GomokuBoard;
+import com.qisheng.chess.engine.go.GoBoard;
 import com.qisheng.chess.engine.xqwlight.Position;
 import com.qisheng.chess.network.ChatPackets;
 import com.qisheng.chess.network.ChessResignC2SPacket;
@@ -71,15 +76,25 @@ public class CChessBoardScreen extends Screen {
     private static final int ACTION_SELECT = 1;
     private static final int ACTION_MOVE   = 2;
 
+    /** Sentinel square index used by Go to represent a pass (no stone placed). */
+    private static final int PASS_SQ = -1;
+
     private static final int COL_BG_DIM        = 0xCC1A1A1A;
     private static final int COL_BOARD_FRAME   = 0xFF6B4226;
     private static final int COL_BOARD_BG      = 0xFFE8C788;
     private static final int COL_GRID          = 0xFF4A2810;
+    private static final int COL_GRID_DARK     = 0xFF333333;
+    private static final int COL_GO_BG         = 0xFFDBA664;
+    private static final int COL_GO_STAR       = 0xFF000000;
+    private static final int COL_GOMOKU_BG     = 0xFFE8C788;
     private static final int COL_RIVER_TEXT    = 0xFF4A2810;
     private static final int COL_RED_FILL      = 0xFFE85D5D;
     private static final int COL_RED_RING      = 0xFF8C1F1F;
     private static final int COL_BLACK_FILL    = 0xFF2C2C2C;
     private static final int COL_BLACK_RING    = 0xFF000000;
+    private static final int COL_WHITE_STONE   = 0xFFF5F5F5;
+    private static final int COL_BLACK_STONE   = 0xFF101010;
+    private static final int COL_STONE_OUTLINE = 0xFF606060;
     private static final int COL_INNER_RING    = 0xFFD4A857;
     private static final int COL_RED_TEXT      = 0xFFFFF8DC;
     private static final int COL_BLACK_TEXT    = 0xFFFFD700;
@@ -149,7 +164,17 @@ public class CChessBoardScreen extends Screen {
     // 给 fen / selectedSq 赋值的地方都在赋值后调用 refreshBoardCaches()。
     // 两个缓存的键同时做兜底校验：万一将来漏调刷新，也不会画出过期落点。
     private String cachedFen;
+    /**
+     * Variant-aware cached board. For xiangqi we keep the legacy
+     * {@link Position} reference so the existing draw path can keep using
+     * {@code pos.squares[sq]} directly; for other variants we hold a
+     * {@link BoardState} (gomoku {@link GomokuBoard}, go {@link GoBoard},
+     * international chess board) and read piece bytes through the variant's
+     * {@code pieceAt}. Only one of the two is non-null for any given frame.
+     */
     private Position cachedPos;
+    private BoardState cachedBoardState;
+    private BoardVariant cachedVariant;
     private String destCacheFen;
     private int destCacheSelect = Integer.MIN_VALUE;
     private boolean[] destCache;
@@ -459,10 +484,16 @@ public class CChessBoardScreen extends Screen {
         // ----- Center: board -----
         int boardAreaW = availW - 2 * PADDING;
         int boardAreaH = availH - 2 * PADDING;
-        int rawCell = Math.min(boardAreaW / (COLS - 1), boardAreaH / (ROWS - 1));
-        this.cell   = Math.max(CELL_MIN, Math.min(CELL_MAX, rawCell));
-        this.boardW = (COLS - 1) * this.cell;
-        this.boardH = (ROWS - 1) * this.cell;
+        // 变种可走（v0.4）：棋盘格数来自 variant.boardFiles/Ranks，不再写死 9×10
+        int variantCols = cols();
+        int variantRows = rows();
+        int rawCell = Math.min(boardAreaW / Math.max(1, variantCols - 1),
+                               boardAreaH / Math.max(1, variantRows - 1));
+        // 大棋盘（五子棋 15、围棋 19）需要更小的格子，避免超出窗口
+        int cellCap = variantCols >= 15 ? 40 : CELL_MAX;
+        this.cell   = Math.max(CELL_MIN, Math.min(cellCap, rawCell));
+        this.boardW = Math.max(0, (variantCols - 1) * this.cell);
+        this.boardH = Math.max(0, (variantRows - 1) * this.cell);
 
         int boardAreaX = LEFT_W + PADDING;
         int boardAreaY = TITLE_H + PADDING;
@@ -604,6 +635,8 @@ public class CChessBoardScreen extends Screen {
     private void refreshBoardCaches() {
         cachedFen = null;
         cachedPos = null;
+        cachedBoardState = null;
+        cachedVariant = null;
         destCacheFen = null;
         destCacheSelect = Integer.MIN_VALUE;
         destCache = null;
@@ -615,46 +648,99 @@ public class CChessBoardScreen extends Screen {
     /**
      * 当前 FEN 对应的棋盘，只在 FEN 字符串变化时重新解析一次（改前 render()
      * 每帧解析，60 FPS 下每秒新建 60 个约 3.3 KB 的 Position）。
+     *
+     * <p>v0.4 起：变种可走接口 {@link BoardVariant#parseState}，所以非象棋的
+     * 变种（五子棋、围棋、国际象棋）解析后存到 {@link #cachedBoardState}，
+     * 渲染时通过 {@link BoardVariant#pieceAt} 读子力。
      */
-    private Position position() {
+    private BoardState boardState() {
         String f = fen == null ? "" : fen;
-        if (cachedPos == null || !f.equals(cachedFen)) {
+        BoardVariant v = variant();
+        if (cachedBoardState == null || cachedVariant != v || !f.equals(cachedFen)) {
             cachedFen = f;
-            cachedPos = Position.fromFenString(f);
+            cachedVariant = v;
+            BoardState parsed = v.parseState(f);
+            cachedBoardState = parsed;
+            // 同步 cachedPos:仅当变种是象棋时才填充,旧绘制路径继续用。
+            cachedPos = (parsed instanceof Position p) ? p : Position.fromFenString(f);
         }
-        return cachedPos;
+        return cachedBoardState;
     }
 
     /**
-     * 当前选中棋子的全部合法落点，下标即棋盘内部坐标 0..255；未选中
-     * （selectedSq 不在盘上）时返回全 false，且不会做 90 格的空计算。
+     * Xiangqi-only accessor for the legacy render path. Returns the cached
+     * {@link Position} for xiangqi, {@code null} for every other variant
+     * (those go through {@link #boardState()} + {@link BoardVariant#pieceAt}).
+     */
+    private Position position() {
+        boardState();
+        return cachedPos;
+    }
+
+    /** Look up the variant descriptor for the current screen (never null). */
+    private BoardVariant variant() {
+        return BoardRegistry.getByIdOrDefault(variantId);
+    }
+
+    /** Files per rank for the active variant (xiangqi 9, chess 8, gomoku 15, go 9/19). */
+    private int cols() { return variant().boardFiles(); }
+
+    /** Ranks for the active variant (xiangqi 10, chess 8, gomoku 15, go 9/19). */
+    private int rows() { return variant().boardRanks(); }
+
+    /** True when the current variant is the default Xiangqi (uses the xiangqi render path). */
+    private boolean isXiangqi() {
+        return "xiangqi".equals(variantId);
+    }
+
+    /** True when the current variant is gomoku (simple grid + black/white stones). */
+    private boolean isGomoku() {
+        return "gomoku".equals(variantId);
+    }
+
+    /** True when the current variant is Go (9x9 or 19x19, simple grid + stones with star points). */
+    private boolean isGo() {
+        return "go9".equals(variantId) || "go19".equals(variantId);
+    }
+
+    /** True when the active variant accepts single-click placement (gomoku + go). */
+    private boolean isPlacementVariant() {
+        return isGomoku() || isGo();
+    }
+
+    /**
+     * 当前选中棋子的全部合法落点，下标即棋盘内部坐标；未选中
+     * （selectedSq 不在盘上）时返回全 false。
      *
      * <p>首选服务器下发的位图（v0.2 起）：服务端随 {@code CHESS_SYNC} / {@code
-     * CHESS_OPEN_SCREEN} 广播合法的 256 格，客户端不再每帧 90 次 {@code
-     * pos.legalMove}。没有下发时（等待同步、本地缓存单人、finished 等）回退到
-     * 本地计算；本地分支同样按 {@code (fen, selectedSq)} 缓存，避免重算。
+     * CHESS_OPEN_SCREEN} 广播合法的位图，客户端不再每帧 N 次 {@code
+     * canMove}。没有下发时回退到本地计算；本地分支同样按 {@code (fen,
+     * selectedSq)} 缓存，避免重算。位图长度按变种总格数对齐。
      */
     private boolean[] legalDestinations() {
-        if (serverDests != null
+        BoardVariant v = variant();
+        int total = v.totalSquares();
+        if (serverDests != null && serverDests.length >= total
                 && serverDestsSelect == selectedSq
                 && (serverDestsFen == null || serverDestsFen.equals(fen))) {
             return serverDests;
         }
         String f = fen == null ? "" : fen;
-        if (destCache != null && destCacheSelect == selectedSq && f.equals(destCacheFen)) {
+        if (destCache != null && destCache.length == total
+                && destCacheSelect == selectedSq && f.equals(destCacheFen)) {
             return destCache;
         }
-        boolean[] dests = new boolean[256];
-        Position pos = position();
-        if (pos != null && ChineseChessEngine.isSquare(selectedSq)
-                && pos.squares[selectedSq] != 0) {
-            for (int file = 0; file < COLS; file++) {
-                for (int rank = 0; rank < ROWS; rank++) {
-                    int dst = Position.COORD_XY(file + Position.FILE_LEFT,
-                                                rank + Position.RANK_TOP);
-                    if (dst == selectedSq) continue;
-                    if (ChineseChessEngine.canMove(pos, selectedSq, dst)) {
-                        dests[dst] = true;
+        boolean[] dests = new boolean[total];
+        if (v.isValidSquare(selectedSq)) {
+            BoardState bs = boardState();
+            if (bs != null && v.pieceAt(bs, selectedSq) != 0) {
+                for (int file = 0; file < v.boardFiles(); file++) {
+                    for (int rank = 0; rank < v.boardRanks(); rank++) {
+                        int dst = v.indexForFileRank(file, rank);
+                        if (dst == selectedSq) continue;
+                        if (v.canMove(bs, selectedSq, dst)) {
+                            dests[dst] = true;
+                        }
                     }
                 }
             }
@@ -671,12 +757,9 @@ public class CChessBoardScreen extends Screen {
         actionPopup.tick();
         gfx.fill(0, 0, this.width, this.height, COL_BG_DIM);
 
-        Position pos = position();
+        BoardState bs = boardState();
 
-        if ("international".equals(this.variantId)) {
-            drawFrame(gfx);
-            drawInternationalPlaceholder(gfx);
-        } else {
+        if (isXiangqi()) {
             drawFrame(gfx);
             drawGrid(gfx);
             drawRiver(gfx);
@@ -685,7 +768,7 @@ public class CChessBoardScreen extends Screen {
             // stack so the highlighted squares don't visually compete with the
             // current selection ring.
             drawLastMoveOverlay(gfx);
-            if (pos != null) {
+            if (bs instanceof Position pos) {
                 drawPieces(gfx, pos);
                 // 是否在盘上统一用门面判断：selectedSq 来自网络包，越界时
                 // pos.squares[selectedSq] 会直接抛数组越界。
@@ -694,6 +777,15 @@ public class CChessBoardScreen extends Screen {
                     drawLegalDots(gfx, pos, selectedSq);
                 }
             }
+        } else if ("international".equals(this.variantId)) {
+            drawFrame(gfx);
+            drawInternationalPlaceholder(gfx);
+        } else if (isGomoku()) {
+            drawFrame(gfx);
+            drawGomokuBoard(gfx, bs);
+        } else if (isGo()) {
+            drawFrame(gfx);
+            drawGoBoard(gfx, bs);
         }
         drawTitle(gfx);
         drawStatus(gfx);
@@ -723,6 +815,141 @@ public class CChessBoardScreen extends Screen {
         int cy = boardY + boardH / 2;
         gfx.drawCenteredString(this.font, line1, cx, cy - 10, COL_TEXT_PRIMARY);
         gfx.drawCenteredString(this.font, line2, cx, cy + 10, COL_TEXT_MUTED);
+    }
+
+    /**
+     * Gomoku board: simple 15×15 grid with black/white stone discs (no piece
+     * labels, no river/palace). v0.4 ships a functional but minimal renderer;
+     * win highlights and coordinate guides are planned for v0.4.1.
+     */
+    private void drawGomokuBoard(GuiGraphics gfx, BoardState bs) {
+        int fx0 = boardX - 16;
+        int fy0 = boardY - 16;
+        gfx.fill(fx0, fy0, fx0 + boardW + 32, fy0 + boardH + 32, COL_GRID_DARK);
+        gfx.fill(fx0 + 4, fy0 + 4,
+                 fx0 + boardW + 28, fy0 + boardH + 28, COL_GOMOKU_BG);
+
+        int lineThick = Math.max(1, cell / 50);
+        int cMax = cols();
+        int rMax = rows();
+        for (int c = 0; c < cMax; c++) {
+            int x = squareX(c);
+            gfx.fill(x - lineThick / 2, squareY(0),
+                     x + (lineThick + 1) / 2, squareY(rMax - 1) + 1, COL_GRID);
+        }
+        for (int r = 0; r < rMax; r++) {
+            int y = squareY(r);
+            gfx.fill(squareX(0), y - lineThick / 2,
+                     squareX(cMax - 1) + 1, y + (lineThick + 1) / 2, COL_GRID);
+        }
+
+        if (bs == null) return;
+        // Last-move ring goes under the stones so it doesn't visually compete.
+        drawPlacementLastMoveOverlay(gfx);
+
+        BoardVariant v = variant();
+        int discR = Math.max(7, cell / 2 - 2);
+        for (int rank = 0; rank < rMax; rank++) {
+            for (int file = 0; file < cMax; file++) {
+                int sq = v.indexForFileRank(file, rank);
+                byte pc = v.pieceAt(bs, sq);
+                if (pc == 0) continue;
+                boolean isBlack = (pc == GomokuBoard.BLACK);
+                drawStone(gfx, viewCX(file), viewCY(rank), discR, isBlack);
+            }
+        }
+    }
+
+    /**
+     * Go board: 9×9 or 19×19 grid with star points and stone discs. Same
+     * coordinate system as the board; the only special-case markup is the
+     * star-point dots at the canonical Go positions (hoshi).
+     */
+    private void drawGoBoard(GuiGraphics gfx, BoardState bs) {
+        int fx0 = boardX - 16;
+        int fy0 = boardY - 16;
+        gfx.fill(fx0, fy0, fx0 + boardW + 32, fy0 + boardH + 32, COL_GRID_DARK);
+        gfx.fill(fx0 + 4, fy0 + 4,
+                 fx0 + boardW + 28, fy0 + boardH + 28, COL_GO_BG);
+
+        int cMax = cols();
+        int rMax = rows();
+        int lineThick = Math.max(1, cell / 50);
+        for (int c = 0; c < cMax; c++) {
+            int x = squareX(c);
+            gfx.fill(x - lineThick / 2, squareY(0),
+                     x + (lineThick + 1) / 2, squareY(rMax - 1) + 1, COL_GRID);
+        }
+        for (int r = 0; r < rMax; r++) {
+            int y = squareY(r);
+            gfx.fill(squareX(0), y - lineThick / 2,
+                     squareX(cMax - 1) + 1, y + (lineThick + 1) / 2, COL_GRID);
+        }
+        drawStarPoints(gfx, cMax, rMax);
+
+        if (bs == null) return;
+        drawPlacementLastMoveOverlay(gfx);
+
+        BoardVariant v = variant();
+        int discR = Math.max(7, cell / 2 - 2);
+        for (int rank = 0; rank < rMax; rank++) {
+            for (int file = 0; file < cMax; file++) {
+                int sq = v.indexForFileRank(file, rank);
+                byte pc = v.pieceAt(bs, sq);
+                if (pc == 0) continue;
+                boolean isBlack = (pc == GoBoard.BLACK);
+                drawStone(gfx, viewCX(file), viewCY(rank), discR, isBlack);
+            }
+        }
+    }
+
+    /**
+     * Hoshi (star points) for Go. Only two sizes are wired (9×9 + 19×19);
+     * any other size (custom boards, future variants) gets no star points.
+     */
+    private void drawStarPoints(GuiGraphics gfx, int cMax, int rMax) {
+        int[][] hoshi;
+        if (cMax == 9 && rMax == 9) {
+            hoshi = new int[][]{{4, 4}};
+        } else if (cMax == 19 && rMax == 19) {
+            hoshi = new int[][]{{3, 3}, {3, 9}, {3, 15},
+                                {9, 3}, {9, 9}, {9, 15},
+                                {15, 3}, {15, 9}, {15, 15}};
+        } else {
+            return;
+        }
+        int dotR = Math.max(2, cell / 14);
+        for (int[] p : hoshi) {
+            int cx = viewCX(p[0]), cy = viewCY(p[1]);
+            gfx.fill(cx - dotR, cy - dotR, cx + dotR + 1, cy + dotR + 1, COL_GO_STAR);
+        }
+    }
+
+    /**
+     * Translucent overlay ring for the most recent placement (gomoku + go).
+     * Skipped if the move came back as a pass (sentinel -1).
+     */
+    private void drawPlacementLastMoveOverlay(GuiGraphics gfx) {
+        drawPlacementLastMoveSquare(gfx, lastMoveSrc);
+        drawPlacementLastMoveSquare(gfx, lastMoveDst);
+    }
+
+    private void drawPlacementLastMoveSquare(GuiGraphics gfx, int sq) {
+        if (sq < 0 || sq >= variant().totalSquares()) return;
+        int file = variant().fileOf(sq);
+        int rank = variant().rankOf(sq);
+        if (file < 0 || file >= cols() || rank < 0 || rank >= rows()) return;
+        int pad = Math.max(3, cell / 12);
+        int r = Math.max(10, cell / 2) + pad;
+        int cx = viewCX(file), cy = viewCY(rank);
+        gfx.fill(cx - r, cy - r, cx + r + 1, cy + r + 1, 0xC0FFEB6B);
+    }
+
+    /** Draw one black/white stone disc with a thin outline so it reads on any background. */
+    private void drawStone(GuiGraphics gfx, int cx, int cy, int r, boolean isBlack) {
+        int fill = isBlack ? COL_BLACK_STONE : COL_WHITE_STONE;
+        gfx.fill(cx - r, cy - r, cx + r + 1, cy + r + 1, fill);
+        drawRectOutline(gfx, cx - r, cy - r, 2 * r + 1, 2 * r + 1, COL_STONE_OUTLINE, 1);
     }
 
     @Override
@@ -1031,12 +1258,24 @@ public class CChessBoardScreen extends Screen {
     private int squareX(int file) { return boardX + file * cell; }
     private int squareY(int rank) { return boardY + rank * cell; }
 
-    private int viewFile(int fenFile) { return boardFlipped ? (COLS - 1 - fenFile) : fenFile; }
-    private int viewRank(int fenRank) { return boardFlipped ? (ROWS - 1 - fenRank) : fenRank; }
+    private int viewFile(int fenFile) {
+        int cMax = cols();
+        return boardFlipped ? (cMax - 1 - fenFile) : fenFile;
+    }
+    private int viewRank(int fenRank) {
+        int rMax = rows();
+        return boardFlipped ? (rMax - 1 - fenRank) : fenRank;
+    }
     private int viewCX(int fenFile) { return squareX(viewFile(fenFile)); }
     private int viewCY(int fenRank) { return squareY(viewRank(fenRank)); }
-    private int fenFileFromView(int viewFile) { return boardFlipped ? (COLS - 1 - viewFile) : viewFile; }
-    private int fenRankFromView(int viewRank) { return boardFlipped ? (ROWS - 1 - viewRank) : viewRank; }
+    private int fenFileFromView(int viewFile) {
+        int cMax = cols();
+        return boardFlipped ? (cMax - 1 - viewFile) : viewFile;
+    }
+    private int fenRankFromView(int viewRank) {
+        int rMax = rows();
+        return boardFlipped ? (rMax - 1 - viewRank) : viewRank;
+    }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
@@ -1049,7 +1288,9 @@ public class CChessBoardScreen extends Screen {
         if (dx >= 0 && dx <= boardW && dy >= 0 && dy <= boardH) {
             int viewFile = Math.round(dx / (float) cell);
             int viewRank = Math.round(dy / (float) cell);
-            if (viewFile >= 0 && viewFile < COLS && viewRank >= 0 && viewRank < ROWS) {
+            int cMax = cols();
+            int rMax = rows();
+            if (viewFile >= 0 && viewFile < cMax && viewRank >= 0 && viewRank < rMax) {
                 // Playing a move releases the chat input: this branch returns
                 // early, so the click never reaches ChatBoxWidget.mouseClicked
                 // and the caret used to stay in the chat box while the player
@@ -1057,8 +1298,8 @@ public class CChessBoardScreen extends Screen {
                 if (chatBox != null) chatBox.setFocused(false);
                 int fenFile = fenFileFromView(viewFile);
                 int fenRank = fenRankFromView(viewRank);
-                int sq = Position.COORD_XY(fenFile + Position.FILE_LEFT,
-                                            fenRank + Position.RANK_TOP);
+                BoardVariant v = variant();
+                int sq = v.indexForFileRank(fenFile, fenRank);
                 handleBoardClick(sq);
                 return true;
             }
@@ -1077,10 +1318,30 @@ public class CChessBoardScreen extends Screen {
     private void handleBoardClick(int sq) {
         if (stateOrd == 2) return;
         if (myRole < 0 || myRole != sdPlayer) return;
+        if (!variant().isValidSquare(sq)) return;
 
-        Position pos = position();
-        byte pc = (pos != null && ChineseChessEngine.isSquare(sq)) ? pos.squares[sq] : 0;
+        BoardState bs = boardState();
+        BoardVariant v = variant();
+        byte pc = (bs != null) ? v.pieceAt(bs, sq) : 0;
 
+        // Placement variants (gomoku + go): a single click places a stone.
+        // The server treats src == dst as a placement request (GomokuVariant
+        // and GoVariant both accept that) and rejects only illegal drops
+        // (occupied / suicide / ko). The client doesn't need to track a
+        // separate selection state, so this whole path skips the
+        // select→move dance used by xiangqi.
+        if (isPlacementVariant()) {
+            // Place only on an empty square; occupied squares do nothing.
+            // If the player tries to play a pass for go, that comes through
+            // the dedicated pass button (added below the action panel in a
+            // later release).
+            if (pc == 0) {
+                sendInteract(ACTION_MOVE, sq, sq);
+            }
+            return;
+        }
+
+        // Xiangqi / international chess use the original select→move flow.
         boolean isMyPiece = pc != 0
                 && ((myRole == 0 && (pc & 8) == 8)
                 ||  (myRole == 1 && (pc & 16) == 16));
@@ -1093,11 +1354,11 @@ public class CChessBoardScreen extends Screen {
             sendInteract(ACTION_SELECT, sq, 0);
             return;
         }
-        if (selectedSq >= 0 && pos != null) {
-            // 与落点圆点查的是同一份缓存（同样经 ChineseChessEngine.canMove
-            // 计算），所以“显示为可走”和“点击被接受”永远不会互相矛盾。
+        if (selectedSq >= 0 && bs != null) {
+            // 与落点圆点查的是同一份缓存（同样经 v.canMove 计算），所以
+            // "显示为可走"和"点击被接受"永远不会互相矛盾。
             boolean[] dests = legalDestinations();
-            if (ChineseChessEngine.isSquare(sq) && dests[sq]) {
+            if (v.isValidSquare(sq) && dests[sq]) {
                 sendInteract(ACTION_MOVE, selectedSq, sq);
                 return;
             }

@@ -37,7 +37,18 @@ public class GameSession {
     private BoardMode mode = BoardMode.PVP;
     private GameResult result = GameResult.ONGOING;
 
-    private final Position chessData;
+    /**
+     * Variant-specific board state. May be any {@link BoardState}
+     * implementation (Position for xiangqi, IntChessBoard for international,
+     * GomokuBoard for gomoku, GoBoard for go9/go19). Use {@link #getBoardState()}
+     * for the variant-agnostic view; use {@link #getChessData()} only when you
+     * specifically need the xiangqi {@link Position} (e.g. the {@code /qisheng
+     * board} ASCII dump).
+     *
+     * <p>Not {@code final}: it is replaced whenever the variant changes (see
+     * {@link #setVariantId(String)}).
+     */
+    private BoardState boardState;
     private String variantId = BoardRegistry.DEFAULT_ID;
 
     private UUID redPlayer = null;
@@ -65,8 +76,7 @@ public class GameSession {
     private SwitchPackets.Pending pendingSwitch = null;
 
     public GameSession() {
-        this.chessData = new Position();
-        this.chessData.fromFen(CChessUtil.INIT);
+        setVariantId(BoardRegistry.DEFAULT_ID);
     }
 
     public GameState getState() { return state; }
@@ -91,26 +101,55 @@ public class GameSession {
     public GameResult getResult() { return result; }
     public void setResult(GameResult r) { this.result = r; }
 
-    public Position getChessData() { return chessData; }
-
     /**
-     * Stable id of the {@link BoardVariant} this session is using — {@code "xiangqi"}
-     * or {@code "international"}. Persisted in NBT; older saves default to
+     * Stable id of the {@link BoardVariant} this session is using — {@code "xiangqi"},
+     * {@code "international"}, {@code "gomoku"}, {@code "go9"} or {@code "go19"}.
+     * Persisted in NBT; older saves default to
      * {@link BoardRegistry#DEFAULT_ID} so v0.2.x worlds load unchanged.
      */
     public String getVariantId() { return variantId; }
 
     /**
-     * Swap the variant this session is running. Custom versions cannot be
-     * changed mid-game: callers are responsible for making sure the FEN on the
-     * board makes sense for the new variant before invoking this.
+     * Swap the variant this session is running.
+     *
+     * <p>If the existing {@code boardState} does not match the new variant,
+     * it is replaced with the new variant's {@code initialState()} — that
+     * destroys any in-progress board, so callers should reset to
+     * {@link GameState#WAITING} alongside this. (For the v0.4 wiring, the
+     * variant is decided by the block's {@link
+     * com.qisheng.chess.block.AbstractChessBoardBlock#getVariantId()} at the
+     * moment the session is created, so this method is mostly a tag.)
      */
     public void setVariantId(String id) {
-        this.variantId = id == null ? BoardRegistry.DEFAULT_ID : id;
+        String resolved = id == null ? BoardRegistry.DEFAULT_ID : id;
+        if (resolved.equals(this.variantId) && this.boardState != null) return;
+        this.variantId = resolved;
+        BoardVariant v = BoardRegistry.getByIdOrDefault(resolved);
+        this.boardState = v.initialState();
     }
 
-    /** Variant-aware view of the underlying board state. */
-    public BoardState getBoardState() { return chessData; }
+    /**
+     * Variant-aware view of the underlying board state. Returns the live
+     * {@link BoardState} (Position for xiangqi, IntChessBoard for chess, etc.).
+     */
+    public BoardState getBoardState() { return boardState; }
+
+    /**
+     * Replace the board state. Callers are responsible for keeping it
+     * consistent with the current variant; the setter does not validate.
+     */
+    public void setBoardState(BoardState state) { this.boardState = state; }
+
+    /**
+     * Convenience: returns the xiangqi {@link Position} if and only if the
+     * session is playing xiangqi. {@code null} for every other variant.
+     *
+     * <p>Use this from {@code /qisheng board} and other xiangqi-only paths;
+     * gameplay code should go through {@link #getBoardState()} + the variant.
+     */
+    public Position getChessData() {
+        return boardState instanceof Position p ? p : null;
+    }
 
     /**
      * The {@link BoardVariant} for this session — convenience wrapper around
@@ -186,19 +225,19 @@ public class GameSession {
 
     public GameResult checkGameOver() {
         BoardVariant v = getVariant();
-        BoardState state = chessData;
+        BoardState state = boardState;
 
         if (v.isCheckmate(state)) {
             return sdPlayer == 0 ? GameResult.BLACK_WIN : GameResult.RED_WIN;
         }
 
-        // Variant-specific draw rules. Two flavours right now:
+        // Variant-specific draw rules:
         //   - Xiangqi has threefold / move-limit drawn through the xqwlight
         //     board's own counters (repStatus + distance).
         //   - International chess has the 50-move rule (halfmoveClock >= 100).
-        if (v instanceof XiangqiVariant) {
-            if (CChessUtil.isRepeat(chessData)) return GameResult.DRAW;
-            if (CChessUtil.reachMoveLimit(chessData)) return GameResult.DRAW;
+        if (v instanceof XiangqiVariant && state instanceof Position p) {
+            if (CChessUtil.isRepeat(p)) return GameResult.DRAW;
+            if (CChessUtil.reachMoveLimit(p)) return GameResult.DRAW;
         }
         if (v instanceof InternationalChessVariant && state instanceof IntChessBoard b) {
             if (b.halfmoveClock >= 100) return GameResult.DRAW;
@@ -225,7 +264,8 @@ public class GameSession {
     /** Snapshot of everything that must survive a server restart. */
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
-        tag.putString(TAG_FEN, chessData.toFen());
+        tag.putString(TAG_VARIANT, variantId);
+        tag.putString(TAG_FEN, getVariant().toFen(boardState));
         tag.putString(TAG_STATE, state.name());
         tag.putString(TAG_MODE, mode.name());
         tag.putString(TAG_RESULT, result.name());
@@ -235,7 +275,6 @@ public class GameSession {
         if (blackPlayer != null) tag.putUUID(TAG_BLACK, blackPlayer);
         tag.putInt(TAG_LAST_SRC, lastMoveSrc);
         tag.putInt(TAG_LAST_DST, lastMoveDst);
-        tag.putString(TAG_VARIANT, variantId);
         return tag;
     }
 
@@ -244,32 +283,41 @@ public class GameSession {
      *
      * <p>Never returns {@code null} and never throws: a tag written by an older
      * build, or one hand-edited into a broken state, degrades to a fresh WAITING
-     * game rather than crashing chunk load. The FEN goes through
-     * {@link ChineseChessEngine#isWellFormedFen} first, because the engine's own
-     * parser accepts anything and would happily produce a nonsense board.
+     * game rather than crashing chunk load. The FEN is dispatched to the
+     * variant's {@code parseState} so each chess family's dialect round-trips
+     * losslessly.
      */
     public static GameSession fromTag(CompoundTag tag) {
+        // Older saves have no Variant tag. They are xiangqi by construction;
+        // loading them under any other id would crash the first move.
+        String savedVariant = tag.getString(TAG_VARIANT);
+        if (savedVariant.isEmpty()) savedVariant = BoardRegistry.DEFAULT_ID;
+
         GameSession s = new GameSession();
+        // Bypass the no-op short-circuit in setVariantId by writing the field
+        // directly; we are about to overwrite boardState with the parsed state
+        // anyway.
+        s.variantId = savedVariant;
+        BoardVariant v = BoardRegistry.getByIdOrDefault(savedVariant);
+
         String fen = tag.getString(TAG_FEN);
-        if (ChineseChessEngine.isWellFormedFen(fen)) {
-            s.chessData.fromFen(fen);
+        BoardState parsed = v.parseState(fen);
+        if (parsed != null) {
+            s.boardState = parsed;
         }
+
         s.state = enumOr(GameState.class, tag.getString(TAG_STATE), GameState.WAITING);
         s.mode = enumOr(BoardMode.class, tag.getString(TAG_MODE), BoardMode.PVP);
         s.result = enumOr(GameResult.class, tag.getString(TAG_RESULT), GameResult.ONGOING);
         s.sdPlayer = tag.getInt(TAG_SD) == 1 ? 1 : 0;
         int sel = tag.getInt(TAG_SELECT);
-        s.selectPoint = ChineseChessEngine.isSquare(sel) ? sel : -1;
+        s.selectPoint = v.isValidSquare(sel) ? sel : -1;
         if (tag.hasUUID(TAG_RED)) s.redPlayer = tag.getUUID(TAG_RED);
         if (tag.hasUUID(TAG_BLACK)) s.blackPlayer = tag.getUUID(TAG_BLACK);
         int src = tag.getInt(TAG_LAST_SRC);
-        s.lastMoveSrc = ChineseChessEngine.isSquare(src) ? src : -1;
+        s.lastMoveSrc = v.isValidSquare(src) ? src : -1;
         int dst = tag.getInt(TAG_LAST_DST);
-        s.lastMoveDst = ChineseChessEngine.isSquare(dst) ? dst : -1;
-        // Older saves have no Variant tag. They are xiangqi by construction;
-        // loading them under any other id would crash the first move.
-        String savedVariant = tag.getString(TAG_VARIANT);
-        s.variantId = savedVariant.isEmpty() ? BoardRegistry.DEFAULT_ID : savedVariant;
+        s.lastMoveDst = v.isValidSquare(dst) ? dst : -1;
         // A game cannot be "playing" with nobody seated; that only happens when
         // the file was edited. Demote instead of leaving a zombie game.
         if (s.state == GameState.PLAYING && s.redPlayer == null && s.blackPlayer == null) {

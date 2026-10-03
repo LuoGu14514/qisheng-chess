@@ -177,7 +177,7 @@ public class ModCommands {
         GameLogic.SelectOutcome out = GameLogic.trySelect(t.session(), player.getUUID(), sq);
         GameBroadcaster.broadcastSync(t.level(), t.session(), t.pos());
         if (out == GameLogic.SelectOutcome.OK) {
-            byte pc = t.session().getChessData().squares[sq];
+            int pc = t.session().getVariant().pieceAt(t.session().getBoardState(), sq);
             ctx.getSource().sendSystemMessage(Component.translatable(
                     "qisheng.chess.cmd.select.ok", sq, pc));
             return 1;
@@ -211,7 +211,7 @@ public class ModCommands {
         if (session.getRedPlayer() != null) sm.evictPlayer(session.getRedPlayer());
         if (session.getBlackPlayer() != null) sm.evictPlayer(session.getBlackPlayer());
 
-        session.getChessData().fromFen(CChessUtil.INIT);
+        session.setBoardState(session.getVariant().initialState());
         session.setSdPlayer(0);
         session.setState(GameState.WAITING);
         session.setResult(GameResult.ONGOING);
@@ -234,11 +234,23 @@ public class ModCommands {
             ctx.getSource().sendSystemMessage(Component.translatable("qisheng.chess.cmd.not_in_game_idle"));
             return 1;
         }
-        ctx.getSource().sendSystemMessage(Component.literal(CChessUtil.boardToAscii(t.session().getChessData())));
-        int role = t.session().getPlayerRole(player.getUUID());
-        Component turn = Component.translatable(t.session().getSdPlayer() == 0
+        GameSession session = t.session();
+        // /qisheng board is currently xiangqi-only: render the ASCII via the
+        // xiangqi facade when the variant matches, otherwise print a generic
+        // FEN-based notice. v0.4 will grow dedicated ASCII renderers per
+        // variant if needed.
+        Position xiangqiPos = session.getChessData();
+        if (xiangqiPos != null) {
+            ctx.getSource().sendSystemMessage(Component.literal(CChessUtil.boardToAscii(xiangqiPos)));
+        } else {
+            ctx.getSource().sendSystemMessage(Component.translatable(
+                    "qisheng.chess.cmd.board.non_xiangqi",
+                    Component.translatable(session.getVariant().displayNameKey())));
+        }
+        int role = session.getPlayerRole(player.getUUID());
+        Component turn = Component.translatable(session.getSdPlayer() == 0
                 ? "qisheng.chess.role.red" : "qisheng.chess.role.black");
-        Component yourTurn = (role == t.session().getSdPlayer())
+        Component yourTurn = (role == session.getSdPlayer())
                 ? Component.translatable("qisheng.chess.cmd.board.your_move")
                 : Component.translatable("qisheng.chess.cmd.board.waiting");
         ctx.getSource().sendSystemMessage(Component.translatable(
@@ -402,7 +414,7 @@ public class ModCommands {
         session.setBlackPlayer(null);
         session.setSdPlayer(0);
         session.setSelectPoint(-1);
-        session.getChessData().fromFen(CChessUtil.INIT);
+        session.setBoardState(session.getVariant().initialState());
         session.setState(GameState.WAITING);
         session.setResult(GameResult.ONGOING);
         if (survivorId != null) sm.evictPlayer(survivorId);

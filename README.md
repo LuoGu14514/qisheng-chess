@@ -1,14 +1,19 @@
 # 启升棋 qisheng-chess
 
 Minecraft 1.20.1 的**棋类 PVP 模组**(Fabric)。放下一张棋盘方块,右键坐下,
-两个人就在游戏里下一局真正的象棋 —— v0.3.1 同时支持**中国象棋**(默认)与
-**国际象棋**(FIDE 完整规则:王车易位 / 吃过路兵 / 升变 / 50 步和棋),
-红先、将死判负、重复局面与自然限着判和、求和 / 认输 / 红黑互换 / 旁观 / 局内聊天,
+两个人就在游戏里下一局真正的棋 —— v0.4.0 同时支持**五种棋**:
+
+- **中国象棋**(默认)— 红先、将死判负、自然限着与重复局面判和
+- **国际象棋**(FIDE 完整规则:王车易位 / 吃过路兵 / 升变 / 50 步和棋)
+- **五子棋**(15×15,黑先,五连胜,Renju 接受 overline)
+- **围棋**(9 路 / 19 路,黑先,7.5 目贴目,中国数子,自杀禁手,简版 ko)
+
+红先、将死判负、求和 / 认输 / 红黑互换 / 旁观 / 局内聊天,
 全部由**服务端权威**裁判。
 
 - 模组 ID:`qisheng_chess`
-- 方块:`qisheng_chess:cchess`
-- 当前版本:`0.3.1`
+- 方块:`qisheng_chess:cchess`(中国象棋)/ `qisheng_chess:gomoku`(五子棋)/ `qisheng_chess:go`(围棋)
+- 当前版本:`0.4.0`
 - 平台:**仅 Fabric**。NeoForge 模块已于 v0.1.2 移除(它此前处于半删除状态,源码语法都不完整)。
 
 ---
@@ -88,16 +93,21 @@ fabric/build/libs/qisheng_chess-fabric-<version>-sources.jar
 
 ## 玩法
 
-1. 合成/取出 `qisheng_chess:cchess` 方块放下。
-2. 走到 **5 格以内**右键 —— 第一位玩家入座红方,GUI 自动打开。
-3. 第二位玩家右键入座黑方,对局开始(**PVP**);或留在单人上 ——
-   全局模式为 **PVC** 时入座红方即开始,**电脑执黑**(`/qisheng mode pvc`)。
+1. 合成/取出 `qisheng_chess:cchess`(中国象棋) / `qisheng_chess:gomoku`(五子棋) /
+   `qisheng_chess:go`(围棋,默认 9 路;可放 `[size=19]` 摆 19 路棋盘)方块放下。
+2. 走到 **5 格以内**右键 —— 第一位玩家入座红/黑方(按方块决定谁先),GUI 自动打开。
+3. 第二位玩家右键入座对手,对局开始(**PVP**);或留在单人上 ——
+   全局模式为 **PVC** 时入座任一方即开始,**电脑执对手**(`/qisheng mode pvc`)。
 4. 第三位及以后右键 = 旁观;等有空位时用 `/qisheng takeover red|black` 接手
    (PVC 棋盘拒绝第二个真人接手,电脑才是固定的对手)。
 
 GUI 内的按钮:求和、认输、红黑互换、离开。棋盘下方是旁观名单,右侧是局内聊天。
 最近一次走子的起点和终点会被高亮成淡黄色色块,便于看清刚刚发生了什么;同时
 会有一次轻微的 Note Block Pling 音效（v0.2.1 起）。
+
+> **变种 GUI 范围**:中国象棋与国际象棋有完整的 90/64 格规则渲染;
+> 五子棋 / 围棋 是简化的功能性渲染(无坐标、无提示窗、无 AI 高亮);
+> 真要下出水平,还得等后续版本(预计 v0.4.2+ 加 AI 与坐标)。
 
 ### 命令
 
@@ -150,18 +160,21 @@ qisheng-chess/
 
 - **对局快照有丢失窗口**:棋盘状态在每次状态变化时标脏,随区块存档落盘;
   若在区块被保存前进程被杀,最近若干步可能丢失。
-- **PVC 的电脑执黑,不可换**:`BoardMode.PVC` 下人类永远执红;`/qisheng takeover`
-  与 `swapRoles` 都会拒绝(PVC 棋盘就是单人 vs 引擎)。
+- **PVC 的电脑执固定颜色,不可换**:`BoardMode.PVC` 下人类永远执红;`/qisheng takeover`
+  与 `swapRoles` 都会拒绝(PVC 棋盘就是单人 vs 引擎)。**v0.4.0 仅给中国象棋 PVC 实现了引擎**(xqwlight GPL-2.0);
+  五子棋 / 围棋 / 国际象棋的 PVC 当前直接 `firstLegalMove` 兜底,真要下出水平得等后续版本。
 - **界面只做了 `zh_cn` 与 `en_us` 两种语言**。
 - **GUI 仍缺走子动画**（最近一步高亮与走子音效已于 v0.2.1 落地）。
 
 ## 放置与朝向
 
-`qisheng_chess:cchess` 接受 `facing` 状态属性,可设为 `north` / `south` /
+三个棋盘方块都接受 `facing` 状态属性,可设为 `north` / `south` /
 `east` / `west`(默认 `north`)。`south` 会让 GUI 渲染时把棋盘整体翻转 180°,
-适合把棋盘靠着北墙放、让南边走过来的玩家红方仍在下方;其余朝向只影响方块本身
-的 3-D 朝向,GUI 不变。可用 vanilla 命令测试:
+适合把棋盘靠着北墙放、让南边走过来的玩家仍能正常落子;其余朝向只影响方块本身
+的 3-D 朝向,GUI 不变。围棋方块还接受 `size` (9 或 19,默认 9)。
 
 ```
 /setblock ~ ~ ~ qisheng_chess:cchess[facing=south]
+/setblock ~ ~ ~ qisheng_chess:gomoku[facing=south]
+/setblock ~ ~ ~ qisheng_chess:go[facing=south,size=19]
 ```

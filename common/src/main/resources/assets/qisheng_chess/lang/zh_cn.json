@@ -1,6 +1,10 @@
 {
   "block.qisheng_chess.cchess": "中国象棋棋盘",
   "item.qisheng_chess.cchess": "中国象棋棋盘",
+  "block.qisheng_chess.gomoku": "五子棋棋盘",
+  "item.qisheng_chess.gomoku": "五子棋棋盘",
+  "block.qisheng_chess.go": "围棋棋盘",
+  "item.qisheng_chess.go": "围棋棋盘",
   "itemGroup.qisheng_chess": "启升棋",
 
   "qisheng.chess.action.chat": "评论/聊天",
@@ -125,5 +129,10 @@
   "qisheng.chess.cmd.mode.label_pvp": "PVP",
   "qisheng.chess.cmd.mode.label_pvc": "PVC",
   "qisheng.chess.screen.variant.international.placeholder.line1": "国际象棋 — 服务端引擎已就绪",
-  "qisheng.chess.screen.variant.international.placeholder.line2": "GUI 渲染器将在 v0.3.2 落地 (8×8 棋盘 + 升变 + 王车易位)"
+  "qisheng.chess.screen.variant.international.placeholder.line2": "GUI 渲染器将在 v0.3.2 落地 (8×8 棋盘 + 升变 + 王车易位)",
+  "qisheng.chess.variant.xiangqi": "中国象棋",
+  "qisheng.chess.variant.international": "国际象棋",
+  "qisheng.chess.variant.gomoku": "五子棋",
+  "qisheng.chess.variant.go9": "围棋 (9 路)",
+  "qisheng.chess.variant.go19": "围棋 (19 路)"
 }

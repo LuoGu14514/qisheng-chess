@@ -43,7 +43,7 @@ import java.util.UUID;
  * Base class for every "chess-like board" block the mod ships.
  *
  * <p>v0.4 introduces two more concrete blocks —
- * {@link GomokuBoardBlock} and {@link GoBoardBlock} — so the joint logic
+ * {@link GomokuBoardBlock}, {@link GoBoard9Block} and {@link GoBoard19Block} — so the joint logic
  * (right-click flow, proximity check, FACING, session key) moves up here
  * and the subclasses only declare the variant they play and the visuals
  * (map color, sound) that distinguish them.
@@ -75,7 +75,8 @@ public abstract class AbstractChessBoardBlock extends BaseEntityBlock {
      * {@code "go9"} or {@code "go19"}.
      *
      * <p>For blocks whose variant depends on the live {@link BlockState}
-     * (e.g. {@link GoBoardBlock}'s {@code size}), override
+     * (no longer needed now that GoBoard9Block / GoBoard19Block are separate
+     * concrete blocks), override
      * {@link #getVariantId(BlockState)} instead of this method.
      */
     public abstract String getVariantId();

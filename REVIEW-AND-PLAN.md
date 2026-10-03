@@ -602,7 +602,9 @@ BUILD SUCCESSFUL 23s (4 executed, 8 up-to-date)
 |---|---|
 | `common/.../block/AbstractChessBoardBlock.java` | 抽 use / onPlace / onRemove / FACING / rotate / mirror / newBlockEntity 共享逻辑; abstract `getVariantId()`; 3 个静态属性 helper |
 | `common/.../block/GomokuBoardBlock.java` | 五子棋棋盘方块, `extends AbstractChessBoardBlock` |
-| `common/.../block/GoBoardBlock.java` | 围棋棋盘方块, `BOARD_SIZE = IntegerProperty.create("size", 9, 19)`, `getVariantId(BlockState)` 按 size 路由 |
+| `common/.../block/GoBoard9Block.java` | 围棋 9 路方块, `VARIANT_ID = "go9"`（v0.4.2 新增，原 `GoBoardBlock` 的 size=9 路径被替换为独立类）|
+| `common/.../block/GoBoard19Block.java` | 围棋 19 路方块, `VARIANT_ID = "go19"`（v0.4.2 新增，原 `GoBoardBlock` 的 size=19 路径被替换为独立类）|
+| `common/.../block/GoBoardBlock.java` | **v0.4.2 已删除** —— 用 `BOARD_SIZE` 切换 9/19 的方案被 `GoBoard9Block` + `GoBoard19Block` 两个独立方块取代 |
 | `common/.../engine/gomoku/GomokuBoard.java` | 五子棋状态: `byte[225]`, `sdPlayer`, `moveCount`, `winner` |
 | `common/.../engine/gomoku/GomokuVariant.java` | 15×15 规则, FEN dialect `<15 ranks> <turn>`, 5+ 胜 |
 | `common/.../engine/go/GoBoard.java` | 围棋状态: `byte[size*size]`, `sdPlayer`, `blackCaptures/whiteCaptures`, `koSquare`, `passes`, `finished` |
@@ -619,8 +621,8 @@ BUILD SUCCESSFUL 23s (4 executed, 8 up-to-date)
 | `common/.../engine/xiangqi/XiangqiVariant.java` | 实现 3 helper (走 Position.COORD_XY) |
 | `common/.../engine/international/InternationalChessVariant.java` | 实现 3 helper (走 IntChessBoard.sq) |
 | `common/.../block/CChessBoardBlock.java` | 瘦身到 15 行, `extends AbstractChessBoardBlock` |
-| `common/.../block/ModBlocks.java` | 注册 CCHESS + GOMOKU + GO |
-| `common/.../block/ModBlockEntities.java` | 单 `BlockEntityType` 绑定 3 个 Block |
+| `common/.../block/ModBlocks.java` | 注册 CCHESS + GOMOKU + GO9 + GO19 四个方块（v0.4.2 起 GO 拆为 GO9 + GO19）|
+| `common/.../block/ModBlockEntities.java` | 单 `BlockEntityType` 绑定 4 个 Block |
 | `common/.../tileentity/CChessTileEntity.java` | `ensureSession(String preferredVariantId)` overload |
 | `common/.../pvp/GameSession.java` | `boardState: BoardState` 字段 + `getChessData()` instanceof fallback |
 | `common/.../command/ModCommands.java` | doSelect / doReset / doLeave 改走 variant API |
@@ -632,7 +634,7 @@ BUILD SUCCESSFUL 23s (4 executed, 8 up-to-date)
 
 #### 抽象方块基类 vs 三个具体子类
 
-- `AbstractChessBoardBlock` 抽共享 use/onPlace/onRemove/FACING/rotate/mirror/newBlockEntity/Properties 帮助。三个具体子类只实现 `getVariantId()` (and GoBoardBlock 多一个 `getVariantId(BlockState)` 按 size 路由)。
+- `AbstractChessBoardBlock` 抽共享 use/onPlace/onRemove/FACING/rotate/mirror/newBlockEntity/Properties 帮助。v0.4.2 起四个具体子类（CChessBoardBlock / GomokuBoardBlock / GoBoard9Block / GoBoard19Block）只实现无参 `getVariantId()` —— 不再需要 `getVariantId(BlockState)` 间接路径，因为围棋拆分已经把 size 选择上提到方块类型层。
 - `ModBlocks` 用同一 `Block.Properties` 模式: `mapColor + strength(2.0f) + sound(WOOD) + noOcclusion()`。围棋 / 五子棋换不同的 mapColor 让方块在世界里有视觉区分。
 
 #### GameSession 重构
@@ -758,4 +760,68 @@ BUILD SUCCESSFUL 23s (4 executed, 8 up-to-date)
 ChineseChessEngineTest 8 + GomokuVariantTest 20 + GoVariantTest 22 + InternationalChessVariantTest 18 + XiangqiVariantTest 10 + PositionTest 11 + SearchTimeBudgetTest 5 + LegalDestsBitmapTest 6 + GameSessionPersistenceTest 13 + PvcGameLoopTest 15。
 
 jar = `qisheng_chess-fabric-0.4.1.jar` = 246374 B（vs 0.4.0 = 239416 B，+6958 B = ~3%，符合预期）。
+
+---
+
+## 12. v0.4.2 — 围棋拆成两个独立方块（执行记录）
+
+### 12.1 用户意图
+
+> "围棋提供两个棋盘"（m05499）
+
+v0.4 引入围棋时用单个方块 + `BOARD_SIZE` BlockState 切换 9/19 尺寸。这种方案在 `/setblock ~ ~ ~ qisheng_chess:go[size=19]` 时能用，但在创造模式物品栏里只看到一个 "Go Board" 物品，无法直接选 9 路还是 19 路。v0.4.2 拆成两个独立方块 `go9` + `go19`，对应两个独立 BlockItem。
+
+### 12.2 文件清单
+
+#### 新文件
+
+| 路径 | 用途 |
+|---|---|
+| `common/.../block/GoBoard9Block.java` | 围棋 9 路方块, `VARIANT_ID = "go9"`, 用 `goProperties()` |
+| `common/.../block/GoBoard19Block.java` | 围棋 19 路方块, `VARIANT_ID = "go19"`, 用 `goProperties()` |
+
+#### 删除文件
+
+| 路径 | 原因 |
+|---|---|
+| `common/.../block/GoBoardBlock.java` | 用 `BOARD_SIZE` IntegerProperty 切换 9/19 的方案被两个独立具体类取代 |
+
+#### 修改文件
+
+| 路径 | 变更 |
+|---|---|
+| `common/.../block/ModBlocks.java` | 从 `CCHESS + GOMOKU + GO` 三个改为 `CCHESS + GOMOKU + GO9 + GO19` 四个 |
+| `common/.../block/AbstractChessBoardBlock.java` | Javadoc 引用 `GoBoardBlock` → `GoBoard9Block, GoBoard19Block` |
+| `common/.../item/ModItems.java` | 四个 BlockItem 全部注册（CCHESS + GOMOKU + GO9 + GO19） |
+| `common/.../tileentity/ModBlockEntities.java` | 单一 `BlockEntityType` 绑定四个 Block |
+| `common/.../lang/zh_cn.json` + `en_us.json` | `block.qisheng_chess.go` + `item.qisheng_chess.go` 替换为 `go9` + `go19` |
+| `gradle.properties` | `mod_version=0.4.1 → 0.4.2` |
+| `CHANGELOG.md` | 顶部加 `[0.4.2]` 章节 |
+| `README.md` | 方块清单 + `/setblock` 示例更新 |
+
+### 12.3 关键设计决策
+
+- **为什么拆方块而不是用 `IntegerProperty`？**
+  1. 创造模式物品栏里玩家直接看到 "Go Board (9x9)" / "Go Board (19x19)" 两件 BlockItem，比 `/setblock ... [size=19]` 直观。
+  2. `BoardVariant.getVariantId()` 是无参的 `String` —— 旧 `GoBoardBlock` 必须 override `getVariantId(BlockState)` 把尺寸传进 `ensureSession(state)`，导致 `AbstractChessBoardBlock.use()` 多走一条间接路径。拆成两个具体类后无参 `getVariantId()` 直接生效。
+- **`AbstractChessBoardBlock.getVariantId(BlockState)` 默认实现保留**：直接调无参版；三个具体子类（v0.4.2 实际是 4 个）都不再 override。
+- **存档兼容**：`GameSession` 持久化只存 `variantId`（"go9" / "go19"）和 FEN，不存方块类型。把 9 路棋盘拆掉、放 19 路方块在同一个坐标，对局数据不自动迁移，但 tile entity NBT 按 variantId 走，不会冲突。
+
+### 12.4 测试
+
+没有新功能 → 没加测试。v0.4.1 的 128 tests 全部继续 PASS。
+
+### 12.5 构建
+
+- `:common:compileJava :common:test` → BUILD SUCCESSFUL，128 tests PASSED。
+- `:fabric:remapJar` → BUILD SUCCESSFUL。
+- jar = `qisheng_chess-fabric-0.4.2.jar` 246637 B（vs 0.4.1 = 246641 B，差 4 字节 —— 主要差异是 GoBoardBlock 删除 + GoBoard9Block/GoBoard19Block 新增的 class metadata 互相抵消，剩余差异是 mod_version 字符串 "0.4.1" → "0.4.2" 的字节变化）。
+
+### 12.6 仍存留（v0.4.3+ 候选）
+
+- 五子棋 / 围棋 GUI 无坐标引导（用户没要求）
+- 围棋无 superko（用户没要求）
+- 国际象棋 AI 1-ply 无 alpha-beta（用户接受"无复杂功能"）
+- 走子动画（用户没要求）
+- 服务端没有实机验证（容器限制）
 

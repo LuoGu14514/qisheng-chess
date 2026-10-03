@@ -5,6 +5,63 @@
 
 ---
 
+## [0.4.2] — 围棋拆成两个独立方块
+
+目标：回应 v0.4.1 之后的用户反馈（"围棋提供两个棋盘"）—— 把 v0.4 引入的单方块 + `BOARD_SIZE` BlockState 改成两个独立方块，物品栏里能直接看到 9 路 / 19 路两个 BlockItem。
+
+### 变更
+
+#### 方块拆分
+
+- **新增** `block/GoBoard9Block`：`extends AbstractChessBoardBlock`，`VARIANT_ID = "go9"`，用 `goProperties()`，无 `BOARD_SIZE` property —— 方块就是 9 路。
+- **新增** `block/GoBoard19Block`：同上，`VARIANT_ID = "go19"`。
+- **删除** `block/GoBoardBlock`：旧版用 `IntegerProperty BOARD_SIZE.create("size", 9, 19)` + `getVariantId(BlockState)` 路由到 `GO_9 / GO_19` 的方案被两个独立具体类取代。
+- **重构** `block/AbstractChessBoardBlock` 的 Javadoc：`GoBoardBlock` 引用替换为 `GoBoard9Block, GoBoard19Block`。
+
+#### 注册
+
+- `block/ModBlocks`：从 `CCHESS + GOMOKU + GO` 三个改为 `CCHESS + GOMOKU + GO9 + GO19` 四个。
+- `item/ModItems`：从只有 `CCHESS` 一个 BlockItem 改为 `CCHESS + GOMOKU + GO9 + GO19` 四个（v0.4.1 已经把 GOMOKU/GO 补上了，现在再分一下）。
+- `tileentity/ModBlockEntities`：单一 `BlockEntityType` 绑定四个 Block；`CChessTileEntity.ensureSession(String)` 仍负责把 variantId 喂给 tile entity，所以棋种信息不依赖 BlockEntityType 区分。
+
+#### i18n
+
+- `lang/zh_cn.json` + `lang/en_us.json`：把 `block.qisheng_chess.go` / `item.qisheng_chess.go` 替换为 `block.qisheng_chess.go9` + `block.qisheng_chess.go19`（同样 item. 前缀）。中文 "围棋棋盘" / 英文 "Go Board" 拆成 "围棋棋盘 (9 路)" / "Go Board (9x9)" + "围棋棋盘 (19 路)" / "Go Board (19x19)"。
+
+#### 设计决策
+
+- 为什么拆方块而不是用 `IntegerProperty`？两个原因：
+  1. 创造模式物品栏里玩家直接看到 "Go Board (9x9)" / "Go Board (19x19)" 两件 BlockItem，比 `/setblock ... [size=19]` 直观得多。
+  2. `BoardVariant` 接口的 `getVariantId()` 是无参的 `String` —— 之前的 `GoBoardBlock` 必须 override `getVariantId(BlockState)` 才能把尺寸传进去，导致 `AbstractChessBoardBlock.use()` 里 `ensureSession(getVariantId(state))` 多走一条间接路径。拆成两个具体类后无参 `getVariantId()` 直接生效。
+- `AbstractChessBoardBlock` 的 `getVariantId()` 现在全部是无参方法；`getVariantId(BlockState)` 默认实现保留（直接调无参版），三个具体子类不再 override。
+
+#### 已知限制
+
+- 已经下好的围棋存档不会因为方块拆分而错位 —— `GameSession` 持久化只存 `variantId`（"go9" 或 "go19"）和 FEN，不存方块类型。所以把 9 路棋盘拆掉、放 19 路方块在同一个坐标，对局数据不会自动迁移，但 tile entity 的 NBT 也是按 variantId 走，不会冲突。
+- 五子棋 / 围棋方块的 break-the-board 行为不变：右击仍然 open GUI + 加入 session，方块类型决定初始 variantId。
+
+#### 文件表
+
+| 文件 | 说明 |
+|---|---|
+| `common/.../block/GoBoard9Block.java` | 新增。围棋 9 路方块，`VARIANT_ID = "go9"`。 |
+| `common/.../block/GoBoard19Block.java` | 新增。围棋 19 路方块，`VARIANT_ID = "go19"`。 |
+| `common/.../block/GoBoardBlock.java` | 删除。被两个独立具体类取代。 |
+| `common/.../block/ModBlocks.java` | 注册 CCHESS + GOMOKU + GO9 + GO19 四个方块。 |
+| `common/.../block/AbstractChessBoardBlock.java` | Javadoc 更新（GoBoardBlock → GoBoard9Block + GoBoard19Block）。 |
+| `common/.../item/ModItems.java` | 四个 BlockItem 全部注册。 |
+| `common/.../tileentity/ModBlockEntities.java` | 单一 BlockEntityType 绑定四个 Block。 |
+| `common/.../lang/zh_cn.json` + `en_us.json` | go → go9 + go19。 |
+| `gradle.properties` | `mod_version = 0.4.2`。 |
+| `README.md` | 方块清单更新 + 版本号。 |
+
+#### 构建
+
+- `:common:compileJava :common:test` → BUILD SUCCESSFUL，128 tests PASSED。
+- `:fabric:remapJar` → BUILD SUCCESSFUL，jar = `qisheng_chess-fabric-0.4.2.jar` 246637 B。
+
+---
+
 ## [0.4.1] — AI 优化 + GUI 补全 + 国际象棋规则补齐
 
 目标：落实 v0.4 之后的代码审查结论（用户优先级 = GUI 优化 + PVC AI 优化 + 基础功能补齐；不做锦标赛等复杂功能）。重点：国际象棋 GUI 从占位变为真实渲染、围棋 Pass 按钮、三连重复 + 子力不足和棋、per-variant AI 强化、i18n 收尾。

@@ -3,8 +3,10 @@
   "item.qisheng_chess.cchess": "中国象棋棋盘",
   "block.qisheng_chess.gomoku": "五子棋棋盘",
   "item.qisheng_chess.gomoku": "五子棋棋盘",
-  "block.qisheng_chess.go": "围棋棋盘",
-  "item.qisheng_chess.go": "围棋棋盘",
+  "block.qisheng_chess.go9": "围棋棋盘 (9 路)",
+  "item.qisheng_chess.go9": "围棋棋盘 (9 路)",
+  "block.qisheng_chess.go19": "围棋棋盘 (19 路)",
+  "item.qisheng_chess.go19": "围棋棋盘 (19 路)",
   "itemGroup.qisheng_chess": "启升棋",
 
   "qisheng.chess.piece.chess.king": "王",

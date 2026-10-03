@@ -3,8 +3,10 @@
   "item.qisheng_chess.cchess": "Chinese Chess Board",
   "block.qisheng_chess.gomoku": "Gomoku Board",
   "item.qisheng_chess.gomoku": "Gomoku Board",
-  "block.qisheng_chess.go": "Go Board",
-  "item.qisheng_chess.go": "Go Board",
+  "block.qisheng_chess.go9": "Go Board (9x9)",
+  "item.qisheng_chess.go9": "Go Board (9x9)",
+  "block.qisheng_chess.go19": "Go Board (19x19)",
+  "item.qisheng_chess.go19": "Go Board (19x19)",
   "itemGroup.qisheng_chess": "Qisheng Chess",
 
   "qisheng.chess.piece.chess.king": "K",

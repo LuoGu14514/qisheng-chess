@@ -22,4 +22,10 @@ public class ModItems {
 
     public static final RegistrySupplier<Item> CCHESS = ITEMS.register("cchess", () ->
             new BlockItem(ModBlocks.CCHESS.get(), new Item.Properties()));
+
+    public static final RegistrySupplier<Item> GOMOKU = ITEMS.register("gomoku", () ->
+            new BlockItem(ModBlocks.GOMOKU.get(), new Item.Properties()));
+
+    public static final RegistrySupplier<Item> GO = ITEMS.register("go", () ->
+            new BlockItem(ModBlocks.GO.get(), new Item.Properties()));
 }

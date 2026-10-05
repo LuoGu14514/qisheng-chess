@@ -947,3 +947,54 @@ v0.4 引入围棋时用单个方块 + `BOARD_SIZE` BlockState 切换 9/19 尺寸
 - 走子动画（用户没要求）
 - 服务端没有实机验证（容器限制）
 
+---
+
+## 15. v0.4.5 — 棋盘纹理 RGBA + alpha=255（执行记录）
+
+### 15.1 用户反馈（m05878）
+
+实测 v0.4.4 后报怨：方块放置到地上时**透明**（看得到背景），但物品栏里的物品材质正常渲染，右击也能正常打开（说明服务端 block + session 都正常，只是客户端渲染问题）。
+
+### 15.2 根因分析
+
+- 我生成的 6 张棋盘 PNG（3 张 block top + 3 个 item）都是 **RGB 模式**（3 字节/像素，无 alpha 通道）。
+- 对比 cchess 的 `qisheng_cchess_top.png` 是 **RGBA 模式**（4 字节/像素）。
+- 用 `Image.open(...).info` 检查 4 张 PNG 都没 `tRNS` / `sRGB` / `gamma` chunks → 排除 PNG 元数据问题。
+- 抽象块 `AbstractChessBoardBlock` 没 override `getRenderShape/getShadeBrightness/isViewBlocking`，用 Block default = SOLID+MODEL+OPAQUE → 排除 MC 渲染属性问题。
+- `client/CChessBoardScreen.java` 没注册 `BlockEntityRenderer`（只有 GUI widgets）→ 排除 BER 覆盖。
+- `models/block/qisheng_{gomoku,go9,go19}.json` 都走 `minecraft:block/cube` + 显式 `textures` map → 排除 block model 问题。
+- 推断：**Fabric/MC 1.20.1 的纹理采样器在某些代码路径把 RGB 模式 PNG 当 alpha=0 处理**。missing texture 应该走紫黑 path，但 RGB 模式走的是另一条 path → 渲染为透明。
+
+### 15.3 修复
+
+- `scripts/generate_board_textures.py`：
+  - `Image.new("RGB", ...)` → `Image.new("RGBA", ...)`，所有像素写为 `(*rgb, 255)` 显式 alpha=255。
+  - 调色板更鲜艳（gomoku bg 212→220，更暖；go bg 180→180 但 grid 20→15，对比度提升）。
+  - grid 线 1px → **2px 厚**（mipmap 缩到 16×16 后仍看得清）。
+  - star 点 3×3 → **5×5**（远处能数出来）。
+  - **删 wood-grain noise**：v0.4.4 用 ~20k 个随机散点模拟木纹，视觉噪声没用反而把 PNG 压缩率搞坏。
+- 6 张 PNG（3 block + 3 item）全部从 RGB 升 RGBA + alpha=255。
+
+### 15.4 设计决策
+
+- **不替换 block model 为 `cube_all`**：v0.4.4 已经把 `north/south/east/west/particle` 5 面换成 `_top.png`，只是 RGB 模式的纹理被当透明。换 RGBA 后这个模型就够了，不用换 `cube_all`。
+- **不强制 sRGB chunk**：cchess 也没 sRGB chunk（`info={}`），加上反而会引入新的兼容性问题。
+- **不删背景像素透明化**：保持完全不透明（alpha=255 全像素），靠 z-ordering 渲染就能稳定显示。
+
+### 15.5 测试
+
+没有渲染/逻辑改动 → 没加测试。128 tests 全部继续 PASS。
+
+### 15.6 构建
+
+- `:common:compileJava :common:test :fabric:remapJar` → BUILD SUCCESSFUL，128 tests PASSED。
+- jar = `qisheng_chess-fabric-0.4.5.jar` **255457 B**（vs 0.4.4 = 387589 B，**-132 KB**——不是问题，是 PNG 压缩率显著改善：简化图案 + 删单一 noise 后 zlib 工作得更好）。
+- 部署：删除 `mods/qisheng_chess-fabric-0.4.4.jar`，复制 0.4.5 到 `D:\PCL 正式版 2.12.6\89\.minecraft\versions\1.20.1-Fabric 0.19.5\mods\`。
+
+### 15.7 仍存留（v0.4.6+ 候选）
+
+- 围棋无 superko（用户没要求）
+- 国际象棋 AI 1-ply 无 alpha-beta（用户接受"无复杂功能"）
+- 走子动画（用户没要求）
+- 服务端没有实机验证（容器限制）
+

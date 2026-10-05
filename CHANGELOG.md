@@ -5,6 +5,38 @@
 
 ---
 
+## [0.4.5] — 棋盘纹理改为 RGBA + alpha=255（修方块透明 bug）
+
+实测 v0.4.4 后报怨：方块放置到地上时**透明**（看得到背景），但物品栏里的物品材质正常渲染，右击也能正常打开（说明服务端 block + session 都正常，只是客户端渲染问题）。
+
+### 根因
+
+v0.4.4 生成的 6 张棋盘 PNG（3 张 block top + 3 个 item）都是 **RGB 模式**（3 字节/像素，无 alpha 通道）。对比 cchess 的 `qisheng_cchess_top.png` 是 **RGBA 模式**（4 字节/像素）。`qisheng_gomoku_top.png` 等用 RGB 模式后，渲染管线在采样时按 alpha=0 显示 → 方块看不见。
+
+通过 `Image.open(...).info` 检查 4 张 PNG 都没 `tRNS` / `sRGB` / `gamma` chunks → 排除 PNG 元数据问题。问题的就是 mode 字段本身。
+
+### 修复
+
+- `scripts/generate_board_textures.py`：
+  - `Image.new("RGB", ...)` → `Image.new("RGBA", ...)`，所有像素写为 `(*rgb, 255)` 显式 alpha=255。
+  - 调色板更鲜艳（gomoku bg 212→220，更暖；roster/象棋 bg 180→180 但 grid 20→15，对比度提升）。
+  - grid 线 1px → **2px 厚**（mipmap 缩到 16×16 后仍看得清）。
+  - star 点 3×3 → **5×5**（远处能数出来）。
+  - **删 wood-grain noise**：v0.4.4 用 ~20k 个随机散点模拟木纹，视觉噪声没用反而把 PNG 压缩率搞坏。
+- 6 张 PNG（3 block + 3 item）全部从 RGB 升 RGBA + alpha=255。
+
+### 测试
+
+没有渲染/逻辑改动 → 没加测试。128 tests 全部继续 PASS。
+
+### 构建
+
+- `:common:compileJava :common:test :fabric:remapJar` → BUILD SUCCESSFUL，128 tests PASSED。
+- jar = `qisheng_chess-fabric-0.4.5.jar` **255457 B**（vs 0.4.4 = 387589 B，**-132 KB**——不是问题，是 PNG 压缩率显著改善：简化图案 + 删单一 noise 后 zlib 工作得更好）。
+- 部署：删除 `mods/qisheng_chess-fabric-0.4.4.jar`，复制 0.4.5 到 `D:\PCL 正式版 2.12.6\89\.minecraft\versions\1.20.1-Fabric 0.19.5\mods\`。
+
+---
+
 ## [0.4.4] — 棋盘缩放变种感知 + 方块所有面显示棋盘纹理
 
 实测 v0.4.3 后两个体验问题：

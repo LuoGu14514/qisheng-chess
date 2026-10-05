@@ -6,7 +6,6 @@ import com.qisheng.chess.pvp.GameResult;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.GameState;
 import com.qisheng.chess.pvp.SessionManager;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -34,8 +33,7 @@ public final class ChessResignC2SPacket {
         return new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
     }
 
-    public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-        ServerPlayer sender = (ServerPlayer) ctx.getPlayer();
+    public static void receive(FriendlyByteBuf buf, ServerPlayer sender) {
         if (sender == null) return;
         SessionManager sm = SessionManager.get();
         BoardKey key = sm.getPlayerGame(sender.getUUID());

@@ -11,7 +11,6 @@ import com.qisheng.chess.network.SpectatorListS2CPacket;
 import com.qisheng.chess.network.SpectatorListS2CPacket.PlayerEntry;
 import com.qisheng.chess.network.SwitchPackets;
 import com.qisheng.chess.tileentity.CChessTileEntity;
-import dev.architectury.networking.NetworkManager;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -49,7 +48,8 @@ public final class GameBroadcaster {
         if (player == null) return;
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         writer.accept(buf);
-        NetworkManager.sendToPlayer(player, channel, buf);
+        // 通过 common 桥接 → Fabric API 直接发包,与 Architectury 类路径无关。
+        ModNetwork.sendToPlayer(player, channel, buf);
     }
 
     /** Fans a packet out to every player seated at or spectating {@code session}. */

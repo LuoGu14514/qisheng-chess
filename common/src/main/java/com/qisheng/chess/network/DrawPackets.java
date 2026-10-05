@@ -8,7 +8,6 @@ import com.qisheng.chess.pvp.GameResult;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.GameState;
 import com.qisheng.chess.pvp.SessionManager;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -55,8 +54,7 @@ public final class DrawPackets {
             return new FriendlyByteBuf(Unpooled.buffer());
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-            ServerPlayer sender = (ServerPlayer) ctx.getPlayer();
+        public static void receive(FriendlyByteBuf buf, ServerPlayer sender) {
             if (sender == null) return;
             SessionManager sm = SessionManager.get();
             BoardKey key = sm.getPlayerGame(sender.getUUID());
@@ -92,7 +90,7 @@ public final class DrawPackets {
             buf.writeUUID(from);
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+        public static void receive(FriendlyByteBuf buf) {
             BlockPos pos = buf.readBlockPos();
             UUID from = buf.readUUID();
             Minecraft mc = Minecraft.getInstance();
@@ -114,8 +112,7 @@ public final class DrawPackets {
             return buf;
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-            ServerPlayer responder = (ServerPlayer) ctx.getPlayer();
+        public static void receive(FriendlyByteBuf buf, ServerPlayer responder) {
             if (responder == null) return;
             boolean accept = buf.readByte() != 0;
             SessionManager sm = SessionManager.get();
@@ -156,7 +153,7 @@ public final class DrawPackets {
             buf.writeByte(result.ordinal());
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+        public static void receive(FriendlyByteBuf buf) {
             int ord = buf.readByte();
             Result res = (ord >= 0 && ord < Result.values().length)
                     ? Result.values()[ord] : Result.CANCELLED;

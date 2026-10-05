@@ -11,7 +11,6 @@ import com.qisheng.chess.pvp.GameResult;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.GameState;
 import com.qisheng.chess.pvp.SessionManager;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -52,8 +51,7 @@ public class ChessInteractC2SPacket {
     public static final int ACTION_MOVE = 2;
     public static final int ACTION_PASS = 3;
 
-    public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-        ServerPlayer player = (ServerPlayer) ctx.getPlayer();
+    public static void receive(FriendlyByteBuf buf, ServerPlayer player) {
         if (player == null) return;
 
         ServerLevel level = player.serverLevel();

@@ -3,7 +3,6 @@ package com.qisheng.chess;
 import com.qisheng.chess.block.ModBlocks;
 import com.qisheng.chess.item.ModCreativeTabs;
 import com.qisheng.chess.item.ModItems;
-import com.qisheng.chess.network.ModNetwork;
 import com.qisheng.chess.tileentity.ModBlockEntities;
 
 /**
@@ -16,7 +15,8 @@ import com.qisheng.chess.tileentity.ModBlockEntities;
  *  2. ModItems (DeferredRegister)
  *  3. ModBlockEntities (DeferredRegister)
  *  4. ModCreativeTabs (DeferredRegister) + populateTabs()
- *  5. ModNetwork (NetworkManager)
+ *  5. ModNetwork — 注册拆到 fabric / fabric.client entrypoint 调用 registerServer/registerClient
+ *  (走 Fabric API,与 Architectury 类路径无关,避免 286 mods shade 旧版 ARK 时的 NoSuchMethodError)
  *
  * 简化 MVP:统一调每个类的 register()
  */
@@ -29,6 +29,5 @@ public final class ModRegistry {
         ModBlockEntities.TILE_ENTITIES.register();
         ModCreativeTabs.TABS.register();
         ModCreativeTabs.populateTabs();
-        ModNetwork.register();
     }
 }

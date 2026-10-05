@@ -5,8 +5,6 @@ import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.GameBroadcaster;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.SessionManager;
-import dev.architectury.networking.NetworkManager;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -41,8 +39,7 @@ public final class SwitchPackets {
             return buf;
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-            ServerPlayer sender = (ServerPlayer) ctx.getPlayer();
+        public static void receive(FriendlyByteBuf buf, ServerPlayer sender) {
             if (sender == null) return;
             UUID target = buf.readUUID();
             SessionManager sm = SessionManager.get();
@@ -87,7 +84,7 @@ public final class SwitchPackets {
                 return;
             }
             FriendlyByteBuf invBuf = Invite.write(sender.getUUID());
-            NetworkManager.sendToPlayer(targetPlayer, ModNetwork.CHESS_SWITCH_INVITE, invBuf);
+            ModNetwork.sendToPlayer(targetPlayer, ModNetwork.CHESS_SWITCH_INVITE, invBuf);
             GameBroadcaster.sendPopupTo(sender,
                     Component.literal("已向 " + targetPlayer.getName().getString()
                             + " 发起换身份邀请…"),
@@ -104,7 +101,7 @@ public final class SwitchPackets {
             return buf;
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+        public static void receive(FriendlyByteBuf buf) {
             UUID requester = buf.readUUID();
             Minecraft mc = Minecraft.getInstance();
             mc.execute(() -> {
@@ -124,8 +121,7 @@ public final class SwitchPackets {
             return buf;
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-            ServerPlayer responder = (ServerPlayer) ctx.getPlayer();
+        public static void receive(FriendlyByteBuf buf, ServerPlayer responder) {
             if (responder == null) return;
             boolean accept = buf.readByte() != 0;
             SessionManager sm = SessionManager.get();
@@ -174,7 +170,7 @@ public final class SwitchPackets {
             buf.writeByte(result.ordinal());
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+        public static void receive(FriendlyByteBuf buf) {
             int ord = buf.readByte();
             // Bounds-checked: a malformed/hostile ordinal used to throw
             // ArrayIndexOutOfBoundsException on the client render thread.

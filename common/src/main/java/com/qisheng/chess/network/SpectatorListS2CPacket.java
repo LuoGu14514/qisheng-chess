@@ -1,7 +1,6 @@
 package com.qisheng.chess.network;
 
 import com.qisheng.chess.client.CChessBoardScreen;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -120,7 +119,7 @@ public class SpectatorListS2CPacket {
         return s.length() <= 64 ? s : s.substring(0, 64);
     }
 
-    public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+    public static void receive(FriendlyByteBuf buf) {
         Roster roster = read(buf);
         Minecraft mc = Minecraft.getInstance();
         mc.execute(() -> {

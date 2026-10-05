@@ -1,7 +1,6 @@
 package com.qisheng.chess.network;
 
 import com.qisheng.chess.client.PopupOverlay;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -43,7 +42,7 @@ public class PopupS2CPacket {
         };}
     }
 
-    public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+    public static void receive(FriendlyByteBuf buf) {
         int sevOrd = buf.readByte();
         // Bounds-checked: a bad ordinal used to crash the client with AIOOBE.
         Severity sev = (sevOrd >= 0 && sevOrd < Severity.values().length)

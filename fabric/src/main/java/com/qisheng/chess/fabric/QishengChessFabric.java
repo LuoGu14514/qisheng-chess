@@ -12,6 +12,9 @@ public class QishengChessFabric implements ModInitializer {
     @Override
     public void onInitialize() {
         ModRegistry.init();
+        // Fabric API 直接注册 C2S packet receivers(不走 Architectury NetworkManager,
+        // 避免其他 mod shade 旧版 ARK 引起的 NoSuchMethodError on server start)。
+        FabricNetworkBridge.initServer();
         FabricEvents.register();
         LOGGER.info("[" + QishengChess.MOD_ID + "] Fabric mod initialized");
     }

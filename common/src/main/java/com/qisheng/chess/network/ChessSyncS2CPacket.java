@@ -1,7 +1,6 @@
 package com.qisheng.chess.network;
 
 import com.qisheng.chess.client.CChessBoardScreen;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -37,7 +36,7 @@ import net.minecraft.network.FriendlyByteBuf;
  */
 public class ChessSyncS2CPacket {
 
-    public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+    public static void receive(FriendlyByteBuf buf) {
         BlockPos pos = buf.readBlockPos();
         String fen = buf.readUtf();
         String variantId = buf.readUtf();

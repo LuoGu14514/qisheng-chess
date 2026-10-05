@@ -16,7 +16,6 @@ import com.qisheng.chess.network.PopupS2CPacket;
 import com.qisheng.chess.network.SpectatorListS2CPacket;
 import com.qisheng.chess.network.SpectatorListS2CPacket.Roster;
 import com.qisheng.chess.network.SwitchPackets;
-import dev.architectury.networking.NetworkManager;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -585,7 +584,7 @@ public class CChessBoardScreen extends Screen {
 
     private void onClickDraw() {
         FriendlyByteBuf buf = DrawPackets.Request.write();
-        NetworkManager.sendToServer(ModNetwork.CHESS_DRAW_REQUEST, buf);
+        ModNetwork.sendToServer(ModNetwork.CHESS_DRAW_REQUEST, buf);
     }
 
     private void onClickResign() {
@@ -596,7 +595,7 @@ public class CChessBoardScreen extends Screen {
                 Component.translatable("qisheng.chess.popup.cancel").getString(),
                 () -> {
                     FriendlyByteBuf buf = ChessResignC2SPacket.write();
-                    NetworkManager.sendToServer(ModNetwork.CHESS_RESIGN, buf);
+                    ModNetwork.sendToServer(ModNetwork.CHESS_RESIGN, buf);
                 },
                 () -> {});
     }
@@ -621,7 +620,7 @@ public class CChessBoardScreen extends Screen {
         }
         if (target == null) return;
         FriendlyByteBuf buf = SwitchPackets.Request.write(target);
-        NetworkManager.sendToServer(ModNetwork.CHESS_SWITCH_REQUEST, buf);
+        ModNetwork.sendToServer(ModNetwork.CHESS_SWITCH_REQUEST, buf);
     }
 
     private void onClickComment() {
@@ -633,12 +632,12 @@ public class CChessBoardScreen extends Screen {
 
     private void sendDrawResponse(boolean accept) {
         FriendlyByteBuf buf = DrawPackets.Response.write(accept);
-        NetworkManager.sendToServer(ModNetwork.CHESS_DRAW_RESPONSE, buf);
+        ModNetwork.sendToServer(ModNetwork.CHESS_DRAW_RESPONSE, buf);
     }
 
     private void sendSwitchResponse(boolean accept) {
         FriendlyByteBuf buf = SwitchPackets.Response.write(accept);
-        NetworkManager.sendToServer(ModNetwork.CHESS_SWITCH_RESPONSE, buf);
+        ModNetwork.sendToServer(ModNetwork.CHESS_SWITCH_RESPONSE, buf);
     }
 
     // ---------- board caches (P2-1) ----------
@@ -1077,7 +1076,7 @@ public class CChessBoardScreen extends Screen {
                 String t = ChatBoxWidget.clampToWire(chatBox.consumeInput());
                 if (!t.isEmpty()) {
                     FriendlyByteBuf buf = ChatPackets.Send.write(t);
-                    NetworkManager.sendToServer(ModNetwork.CHESS_CHAT, buf);
+                    ModNetwork.sendToServer(ModNetwork.CHESS_CHAT, buf);
                 }
                 return true;
             } else if (keyCode == 259) {
@@ -1517,6 +1516,6 @@ public class CChessBoardScreen extends Screen {
             buf.writeShort(b);
         }
         // ACTION_PASS carries no payload.
-        NetworkManager.sendToServer(ModNetwork.CHESS_INTERACT, buf);
+        ModNetwork.sendToServer(ModNetwork.CHESS_INTERACT, buf);
     }
 }

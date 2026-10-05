@@ -5,8 +5,6 @@ import com.qisheng.chess.pvp.BoardKey;
 import com.qisheng.chess.pvp.GameBroadcaster;
 import com.qisheng.chess.pvp.GameSession;
 import com.qisheng.chess.pvp.SessionManager;
-import dev.architectury.networking.NetworkManager;
-import dev.architectury.networking.NetworkManager.PacketContext;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -46,8 +44,7 @@ public final class ChatPackets {
             return buf;
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
-            ServerPlayer sender = (ServerPlayer) ctx.getPlayer();
+        public static void receive(FriendlyByteBuf buf, ServerPlayer sender) {
             if (sender == null) return;
             String text = buf.readUtf(MAX_LEN).trim();
             // strip control chars except tab/newline
@@ -73,10 +70,12 @@ public final class ChatPackets {
 
         public static void broadcast(ServerLevel level, GameSession session, BlockPos pos,
                                       UUID senderId, String text) {
-            FriendlyByteBuf buf = Broadcast.write(senderId, text);
+            // Each recipient gets its own buffer — sharing the same FriendlyByteBuf
+            // would drain the reader index and the second recipient would read empty.
             for (ServerPlayer p : level.players()) {
                 if (session.containsPlayer(p.getUUID()) || session.isSpectator(p.getUUID())) {
-                    NetworkManager.sendToPlayer(p, ModNetwork.CHESS_CHAT, buf);
+                    FriendlyByteBuf buf = Broadcast.write(senderId, text);
+                    ModNetwork.sendToPlayer(p, ModNetwork.CHESS_CHAT, buf);
                 }
             }
         }
@@ -92,7 +91,7 @@ public final class ChatPackets {
             return buf;
         }
 
-        public static void receive(FriendlyByteBuf buf, PacketContext ctx) {
+        public static void receive(FriendlyByteBuf buf) {
             UUID senderId = buf.readUUID();
             String text = buf.readUtf(MAX_LEN);
             Minecraft mc = Minecraft.getInstance();

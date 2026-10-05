@@ -896,3 +896,54 @@ v0.4 引入围棋时用单个方块 + `BOARD_SIZE` BlockState 切换 9/19 尺寸
 - 走子动画（用户没要求）
 - 服务端没有实机验证（容器限制）
 
+---
+
+## 14. v0.4.4 — 棋盘缩放变种感知 + 方块所有面显示棋盘纹理（执行记录）
+
+### 14.1 用户反馈（m05873）
+
+实测 v0.4.3 后两个体验问题：
+
+1. **围棋 / 五子棋棋盘太大**——原 `recomputeLayout()` 只对 `cols >= 15` 棋盘 cap 到 40px cell，其余（包括 9×9 go9、9×10 xiangqi、8×8 国际）走 `CELL_MAX = 80`。在中等分辨率窗口里 go9 cell 实测跑到 80px → 8 格就是 640px，整个棋盘占了窗口一大半。
+2. **方块放置后看不到棋盘纹理**——v0.4.3 的 cube model 只把 board 纹理放在 `up` 面，其余 5 面都用 `oak_planks`。玩家从水平角度看方块时只看得到原木板，跟"物品栏里能看到棋盘图案"形成强对比，第一眼会觉得"纹理没渲染出来"（实际只渲染到了顶部）。
+
+### 14.2 文件清单
+
+#### 修改文件
+
+| 路径 | 变更 |
+|---|---|
+| `client/CChessBoardScreen.java` | `CELL_MAX` 80→56, `CELL_MIN` 32→20; `recomputeLayout()` 的 `cellCap` 由 `variantCols >= 15 ? 40 : CELL_MAX` 改为分档 if/else if (`>=19`→24, `>=15`→32, `>=9`→48, else→56) |
+| `resources/.../models/block/qisheng_gomoku.json` | `north/south/east/west/particle` 5 面从 `oak_planks` 改为 `qisheng_chess:block/qisheng_gomoku_top` |
+| `resources/.../models/block/qisheng_go9.json` | 同上 |
+| `resources/.../models/block/qisheng_go19.json` | 同上 |
+| `gradle.properties` | `mod_version=0.4.3 → 0.4.4` |
+| `CHANGELOG.md` | 顶部加 `[0.4.4]` 章节 |
+| `README.md` | 当前版本 0.4.3 → 0.4.4 |
+| `REVIEW-AND-PLAN.md` | 本节 |
+
+未修改 cchess（用户没抱怨，保持原样）。
+
+### 14.3 关键设计决策
+
+- **棋盘最大占屏宽 432px ≈ 22.5%（1920px 屏）**：给左侧 badge + 右侧按钮面板留足空间。从 720px → 432px（go19）变化最大，go9 从 640px → 384px。所有棋盘现在都有紧凑、统一的视觉占比。
+- **方块纹理覆盖 5 面（up + 4 侧）但 down 还是 oak_planks**：玩家放方块后从任意水平角度都能看到棋盘纹理（旋转 90° 仍然能识别棋种）。`down` 不变是因为方块底部通常看不到，避免对称纹理反而显得人工；cchess 也保留这个 `down=oak_planks` 传统。
+- **cchess 不改**：v0.4.4 之前 cchess 用 `oak_planks` 在 5 面，已经用了一年多，玩家习惯了。gomoku/go9/go19 是 v0.4 新增的方块，按"从任意角度都能识别棋种"的新规范做。
+
+### 14.4 测试
+
+没有逻辑改动 → 没加测试。128 tests 全部继续 PASS。
+
+### 14.5 构建
+
+- `:common:compileJava :common:test :fabric:remapJar` → BUILD SUCCESSFUL，128 tests PASSED。
+- jar = `qisheng_chess-fabric-0.4.4.jar` 387589 B（vs 0.4.3 = 387548 B，+41 B = JSON 模型 6 个面各加 1 个字符串引用 + gradle.properties 版本字符串）。
+- 部署：删除 `mods/qisheng_chess-fabric-0.4.3.jar`，复制 0.4.4 到 `D:\PCL 正式版 2.12.6\89\.minecraft\versions\1.20.1-Fabric 0.19.5\mods\`。
+
+### 14.6 仍存留（v0.4.5+ 候选）
+
+- 围棋无 superko（用户没要求）
+- 国际象棋 AI 1-ply 无 alpha-beta（用户接受"无复杂功能"）
+- 走子动画（用户没要求）
+- 服务端没有实机验证（容器限制）
+

@@ -5,6 +5,45 @@
 
 ---
 
+## [0.4.6] — 用 Fabric API 直接注册网络包（绕开 `Architectury NetworkManager` 签名冲突）
+
+服务端（PCL2 + Fabric Loader 0.19.3 + Architectury 9.2.14 + 286 mods）实测启动崩溃：日志里抛出 `java.lang.NoSuchMethodError: 'void dev.architectury.networking.fabric.NetworkManagerImpl.registerS2CReceiver(class_2960, List, NetworkReceiver)'`，定位在 `ModNetwork.register(ModNetwork.java:63)`。
+
+### 根因
+
+`Architectury NetworkManagerImpl.registerS2CReceiver(ResourceLocation, List<NetworkReceiver>)` 是 Architectury 9.2.14 的内部方法（pkg = `dev.architectury.networking.fabric`），字节码直接调用。服务端 286 mods 中某个 mod 故意 shade 了**旧版** Architectury → JVM 解析时拿到旧版的 `registerS2CReceiver(class_2960, NetworkReceiver)` 签名 → NoSuchMethodError。
+
+经对比 `architectury-fabric-9.2.14.jar` 和 `architectury-9.2.14-fabric.jar` 的 `NetworkManagerImpl.class` / `NetworkManager.class` 字节码完全一致，确认不是 Architectury 自己的版本错配，是被其他 mod shade 后从错类的 classpath 抢先解析。
+
+### 修复方案
+
+**改用 Fabric API 直接注册**，彻底不依赖 `Architectury NetworkManager`：
+
+- `common` 源集：保留 16 个 `ResourceLocation` channel 常量不变；新增 `ModNetwork.FabricSender` 接口（`sendToPlayer / sendToServer`）+ holder（volatile，默认抛 `IllegalStateException`）+ `setSender`；common 端所有 caller（`GameBroadcaster`、`CChessBoardScreen`、各 packet 类）改走 `ModNetwork.sendToPlayer / sendToServer`，**不再 import** `dev.architectury.networking.NetworkManager`。
+- `fabric` 源集：新建 `FabricNetworkBridge implements ModNetwork.FabricSender`，用 `ServerPlayNetworking` 注册 7 个 C2S、`ClientPlayNetworking` 注册 9 个 S2C；`initServer / initClient` 末尾调 `ModNetwork.setSender(INSTANCE)` 把 holder 切换成 fabric 实现。
+- packet 类的 wire format 一字不改（`writeUtf / writeShort / writeBlockPos` 等），只换 `receive()` 回调签名 → 服务端 = `(FriendlyByteBuf, ServerPlayer)` + `(MinecraftServer, ServerPlayer, ServerGamePacketListenerImpl, FriendlyByteBuf, PacketSender)`，客户端 = `(FriendlyByteBuf)` + `(MinecraftClient, ClientPacketListener, FriendlyByteBuf, PacketSender)`。
+- 收到包后处理器逻辑全部从原 `NetworkManager` 迁移到 `FabricNetworkBridge` 的内部 `C2SHandler / S2CHandler` 静态类。
+
+### 为什么用桥接（`FabricSender` 接口 + holder）而不是 `@ExpectPlatform`
+
+`common` 源集的 classpath 只有 `fabric-loader` + `architectury`，**没有 `fabric-api`**——直接 `import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking` 会编译失败。`@ExpectPlatform` 方案要求 common/fabric 各放一个实现文件，样板太多。FabricSender 接口 + holder 把 common 端的所有 caller 抽象成单一跳转，fabric 入口初始化时一次性 set 进去，common 端代码完全无感。
+
+### 测试 / 构建
+
+- `:common:compileJava :common:test :fabric:compileJava :fabric:remapJar` → BUILD SUCCESSFUL。
+- 128 tests 全部 PASSED（含 `NetworkManagerImpl` 引用 → Fabric API 引用迁移，零回归）。
+- jar = `qisheng_chess-fabric-0.4.6.jar` **259392 B**（vs 0.4.5 = 255457 B，**+3.9 KB**——主要是新增 `FabricNetworkBridge.java` ~180 行的字节码）。
+- 部署：删除 `mods/qisheng_chess-fabric-0.4.5.jar`，复制 0.4.6 到 `D:\PCL 正式版 2.12.6\89\.minecraft\versions\1.20.1-Fabric 0.19.5\mods\`。
+- push: `origin/master` = `0e53b6e` v0.4.6,`rev-list --left-right --count HEAD...origin/master` = `0 0`（本地和远端同步）。
+- commit: `0e53b6e v0.4.6: 用 Fabric API 直接注册网络包,绕开 Architectury NetworkManager 签名冲突` 17 files +269/-87。
+
+### 已知遗留 / 后续
+
+- 仓促排版过程中曾尝试 `git add -A` → git 把 `C:\Users\wdsj2\.ssh\known_hosts` 当作 repo-relative path staged（UTF-8 把驱动器分隔符 `:` 渲染成 `U+FFFD`，再把 `\` 剥掉 → 生成 phantom path `C\xef\x80\xbaUserswdsj2.sshknown_hosts`，PowerShell 看不见这个文件名，无法 `git rm --cached`）。最终方案：`git reset --mixed 6f480c8` 清空 index → 显式 `git add <17 文件路径列表>` 避开 → `commit` 干净。
+- `Architectury NetworkManager` 调用点仍残留在测试代码注释里（`ModRegistryTest.java` 等）——非阻塞，纯文本，下版清理。
+
+---
+
 ## [0.4.5] — 棋盘纹理改为 RGBA + alpha=255（修方块透明 bug）
 
 实测 v0.4.4 后报怨：方块放置到地上时**透明**（看得到背景），但物品栏里的物品材质正常渲染，右击也能正常打开（说明服务端 block + session 都正常，只是客户端渲染问题）。

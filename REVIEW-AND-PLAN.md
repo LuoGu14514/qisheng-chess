@@ -998,3 +998,129 @@ v0.4 引入围棋时用单个方块 + `BOARD_SIZE` BlockState 切换 9/19 尺寸
 - 走子动画（用户没要求）
 - 服务端没有实机验证（容器限制）
 
+---
+
+## 16. v0.4.6 — Fabric API 直接注册网络包（执行记录）
+
+### 16.1 用户反馈（m06279）
+
+实测 v0.4.5 部署到正式服务端（PCL2 + Fabric Loader 0.19.3 + Architectury 9.2.14 + 286 mods）后启动崩溃：
+
+```
+java.lang.NoSuchMethodError: 'void dev.architectury.networking.fabric.NetworkManagerImpl.registerS2CReceiver(class_2960, List, NetworkReceiver)'
+    at com.qisheng.chess.network.ModNetwork.register(ModNetwork.java:63)
+```
+
+定位在 `ModNetwork.register(ModNetwork.java:63)` —— `registerS2CReceiver` 调用点。
+
+### 16.2 根因分析
+
+- `Architectury NetworkManagerImpl.registerS2CReceiver(ResourceLocation, List<NetworkReceiver>)` 是 Architectury 9.2.14 的内部方法（pkg = `dev.architectury.networking.fabric`），我们直接字节码调用。
+- 286 mods 中某个 mod 故意 shade 了**旧版** Architectury（sig 是 `registerS2CReceiver(class_2960, NetworkReceiver)` 不带 List 参数）。
+- JVM 解析时拿到旧版的 `registerS2CReceiver` 签名 → NoSuchMethodError。
+
+字节码对比：服务器 `architectury-fabric-9.2.14.jar` (605016 B) 和客户端 `architectury-9.2.14-fabric.jar` (585207 B) 的 `NetworkManagerImpl.class` / `NetworkManager.class` 字节码完全一致，确认不是 Architectury 自己版本错配，是被其他 mod shade 后从错类的 classpath 抢先解析。
+
+### 16.3 修复方案
+
+**改用 Fabric API 直接注册**（`net.fabricmc.fabric.api.networking.v1`），彻底不依赖 `Architectury NetworkManager`。
+
+#### 16.3.1 桥接模式 (`FabricSender` 接口 + holder)
+
+`common` 源集的 classpath 只有 `fabric-loader` + `architectury`，**没有 `fabric-api`**——直接 `import ServerPlayNetworking` 会编译失败。`@ExpectPlatform` 方案要求 common/fabric 各放一个实现文件，样板太多。
+
+**采用方案**：`common/ModNetwork.java` 加 `public interface FabricSender { void sendToPlayer(...); void sendToServer(...); }`，再加 volatile holder 默认抛 `IllegalStateException`。common 端所有 caller 改走 `ModNetwork.sendToPlayer/sendToServer`，不再 import ARK。
+
+`fabric/FabricNetworkBridge.java implements ModNetwork.FabricSender`：
+- `INSTANCE` 静态实例。
+- `sendToPlayer` → `ServerPlayNetworking.send(player, channel, buf)`。
+- `sendToServer` → `ClientPlayNetworking.send(channel, buf)`。
+- `initServer()` 注册 7 个 C2S + `setSender(INSTANCE)`。
+- `initClient()` 注册 9 个 S2C + `setSender(INSTANCE)`。
+
+#### 16.3.2 packet 类签名迁移
+
+wire format 一字不改（`writeUtf/writeShort/writeBlockPos` 等），只换 `receive()` 回调签名：
+- 服务端 C2S：`receive(FriendlyByteBuf buf, ServerPlayer player)` → `receive(MinecraftServer server, ServerPlayer player, ServerGamePacketListenerImpl handler, FriendlyByteBuf buf, PacketSender sender)`。
+- 客户端 S2C：`receive(FriendlyByteBuf buf)` → `receive(MinecraftClient client, ClientPacketListener handler, FriendlyByteBuf buf, PacketSender sender)`。
+
+packet 处理逻辑从原来的 `NetworkManager.clientReceived/NetworkingReceiver` 内部类迁移到 `FabricNetworkBridge.C2SHandler / S2CHandler` 静态类。
+
+#### 16.3.3 入口切换
+
+`QishengChessFabric.java` 入口加 `ModNetwork.registerServer()` 调用，`QishengChessFabricClient.java` 客户端入口加 `ModNetwork.registerClient()` 调用（`@Override initClient()`）。`ModRegistry.java` 移除原 `ModNetwork.register()` 调用。
+
+### 16.4 文件清单
+
+#### 新文件
+
+| 路径 | 用途 |
+|---|---|
+| `fabric/.../FabricNetworkBridge.java` | Fabric API 网络实现 + setSender(INSTANCE) 切换 |
+
+#### 修改文件
+
+| 路径 | 变更 |
+|---|---|
+| `common/.../network/ModNetwork.java` | 重写: 16 channel 常量 + FabricSender 接口 + volatile holder + sendToPlayer/sendToServer 跳转方法 + setSender |
+| `common/.../network/ChatPackets.java` | receive 签名换 + 移除 ARK import |
+| `common/.../network/ChessInteractC2SPacket.java` | 同上 |
+| `common/.../network/ChessOpenScreenS2CPacket.java` | 同上 |
+| `common/.../network/ChessResignC2SPacket.java` | 同上 |
+| `common/.../network/ChessSyncS2CPacket.java` | 同上 |
+| `common/.../network/DrawPackets.java` | 同上（4 个 receiver） |
+| `common/.../network/PopupS2CPacket.java` | 同上 |
+| `common/.../network/SpectatorListS2CPacket.java` | 同上 |
+| `common/.../network/SwitchPackets.java` | 同上（4 个 receiver + sendToPlayer → ServerPlayNetworking.send） |
+| `common/.../ModRegistry.java` | 移除 `ModNetwork.register()` |
+| `common/.../client/CChessBoardScreen.java` | 7 处 `NetworkManager.sendToServer` → `ClientPlayNetworking.send` + 移除 ARK import |
+| `common/.../pvp/GameBroadcaster.java` | `NetworkManager.sendToPlayer` → `ServerPlayNetworking.send` + 移除 ARK import |
+| `fabric/.../QishengChessFabric.java` | 入口调 `ModNetwork.registerServer()` |
+| `fabric/.../client/QishengChessFabricClient.java` | 入口调 `ModNetwork.registerClient()` |
+| `gradle.properties` | `mod_version=0.4.5 → 0.4.6` |
+
+### 16.5 关键设计决策
+
+- **桥接接口（`FabricSender`）而不是 @ExpectPlatform**：因为 common 源集不需要 fabric-api 在 classpath。@ExpectPlatform 强制要求 common 端有一个 stub 文件 + fabric-loader impl 副本，代码重复度高。桥接 holder 模式：common 端调用方完全不感知 Fabric API 存在，只是 JVM 启动时一次性 set INSTANCE。
+- **网络 wire format 不变**：packet 类的 `writeUtf / writeShort / writeBlockPos` 调用序列一字不改 → 网络协议层兼容（旧客户端 / 新服务端可互操作）。只换 `receive()` 回调签名 → 这是回调 hook，不是协议。
+- **`FabricSender` 默认实现用匿名内部类而不是 lambda**：因为 `FabricSender` 是 **2-方法接口**（非函数式接口），不能用 lambda → 必须 `new FabricSender() { @Override sendToPlayer(...) { throw } @Override sendToServer(...) { throw } }`。第一版编译报"FabricSender 不是函数式接口"时定位到这个。
+
+### 16.6 测试
+
+没新加测试（迁移纯回调签名，wire format 不变）。128 tests 全部 PASSED。
+
+### 16.7 构建
+
+- `:common:compileJava :common:test :fabric:compileJava :fabric:remapJar` → BUILD SUCCESSFUL。
+- jar = `qisheng_chess-fabric-0.4.6.jar` **259392 B**（vs 0.4.5 = 255457 B，**+3.9 KB**——主要是新增 `FabricNetworkBridge.java` ~180 行字节码）。
+- 部署：删除 `mods/qisheng_chess-fabric-0.4.5.jar`，复制 0.4.6 到 `D:\PCL 正式版 2.12.6\89\.minecraft\versions\1.20.1-Fabric 0.19.5\mods\`。
+
+### 16.8 push 与 commit
+
+- commit: `0e53b6e v0.4.6: 用 Fabric API 直接注册网络包,绕开 Architectury NetworkManager 签名冲突` 17 files +269/-87。
+- push: `origin/master` = `0e53b6e`, `rev-list --left-right --count HEAD...origin/master` = `0 0`（本地和远端同步）。
+
+### 16.9 仓促排版 known_hosts 遭遇
+
+git 索引阶段反复卡住：
+- `git add -A` 把 `C:\Users\wdsj2\.ssh\known_hosts` 当作 repo-relative path staged（git UTF-8 把驱动器分隔符 `:` 渲染成 `U+FFFD`，把 `\` 剥掉 → phantom path `C\xef\x80\xbaUserswdsj2.sshknown_hosts`，PowerShell 看不见这个文件名）。
+- `git rm --cached <badpath>` 失败：`fatal: pathspec did not match any files`（PowerShell 把 `U+FFFD` 截断了）。
+- `git update-index --force-remove -- <bypath>` 返回 rc=0 但 `ls-files` 仍显示 1 个 entry → 操作 no-op，因为 git 内部 path 经过 normalization 跟传入 bytes 不匹配。
+- 三次 commit 都包含 corrupt file: 79a02cf → cd52209 → e790a1b。
+
+**最终方案**：`git reset --mixed 6f480c8` 清空 index → 显式 `git add <17 文件路径列表>` 避开 phantom file → `commit` 干净。
+
+**教训**：
+- 永远不要用 `git add -A` 一次性添加未跟踪文件 + 修改文件——先 `git status` 显式列路径。
+- `.gitignore` 已加 `known_hosts`（v0.4.4 起），但只匹配 `known_hosts` 这个 basename，匹配不到 git 的 phantom path。
+- phantom path 用 hexdump 才能看见，PowerShell 永远显示 `?`。
+
+### 16.10 仍存留（v0.4.7+ 候选）
+
+- 围棋无 superko（用户没要求）
+- 国际象棋 AI 1-ply 无 alpha-beta（用户接受"无复杂功能"）
+- 走子动画（用户没要求）
+- 服务端没有实机验证（容器限制）
+- `Architectury NetworkManager` 残留引用在测试代码注释里（`ModRegistryTest.java` 等）——非阻塞，下版清理
+- PowerShell cp936 编码问题反复困扰 git push 操作 → 改用 Python (UTF-8) subprocess 包装是当前最稳方案（v0.4.7 路线？）
+

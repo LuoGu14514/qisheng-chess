@@ -25,6 +25,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -118,6 +119,24 @@ public abstract class AbstractChessBoardBlock extends BaseEntityBlock {
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
         return new CChessTileEntity(pos, state);
+    }
+
+    /**
+     * Force the block model to be rendered in the world.
+     *
+     * <p>{@link BaseEntityBlock} (which we extend so the block can have a
+     * {@link CChessTileEntity}) returns {@link RenderShape#INVISIBLE} by
+     * default — it's designed for blocks rendered by a
+     * {@code BlockEntityRenderer} (chests, signs, etc.). Since we have no
+     * BER and want the block's model visible, we explicitly opt back in to
+     * {@link RenderShape#MODEL} so the cube model + top/side textures show
+     * up in the world. Without this override every board variant renders
+     * as nothing (the block + entity still exist — particles, sounds,
+     * right-click all work — you just can't see the block).
+     */
+    @Override
+    public RenderShape getRenderShape(BlockState state) {
+        return RenderShape.MODEL;
     }
 
     @Override

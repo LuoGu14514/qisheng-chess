@@ -57,8 +57,10 @@ public class CChessBoardScreen extends Screen {
 
     private static final int COLS = 9;
     private static final int ROWS = 10;
-    private static final int CELL_MIN = 32;
-    private static final int CELL_MAX = 80;
+    // 用户实测反馈 (m05873): gomoku/go 棋盘太大。 按棋种 cap cell 尺寸,
+    // 越大的棋盘格子越小 (go19 < gomoku < go9 < 国际/象棋)。
+    private static final int CELL_MIN = 20;
+    private static final int CELL_MAX = 56;
 
     /** Three-column layout: left panel | board | right panel. */
     private static final int PADDING = 12;
@@ -491,8 +493,13 @@ public class CChessBoardScreen extends Screen {
         int variantRows = rows();
         int rawCell = Math.min(boardAreaW / Math.max(1, variantCols - 1),
                                boardAreaH / Math.max(1, variantRows - 1));
-        // 大棋盘（五子棋 15、围棋 19）需要更小的格子，避免超出窗口
-        int cellCap = variantCols >= 15 ? 40 : CELL_MAX;
+        // 棋盘越大 → cell 越小 (用户实测反馈 m05873):
+        //   go19 (19) → 24, gomoku (15) → 32, go9/xiangqi (9) → 48, 国际 (8) → 56
+        int cellCap;
+        if      (variantCols >= 19) cellCap = 24;
+        else if (variantCols >= 15) cellCap = 32;
+        else if (variantCols >= 9)  cellCap = 48;
+        else                        cellCap = CELL_MAX;
         this.cell   = Math.max(CELL_MIN, Math.min(cellCap, rawCell));
         this.boardW = Math.max(0, (variantCols - 1) * this.cell);
         this.boardH = Math.max(0, (variantRows - 1) * this.cell);

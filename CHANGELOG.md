@@ -5,6 +5,55 @@
 
 ---
 
+## [0.4.4] — 棋盘缩放变种感知 + 方块所有面显示棋盘纹理
+
+实测 v0.4.3 后两个体验问题：
+
+1. **围棋 / 五子棋棋盘太大**：原 `recomputeLayout()` 只对 `cols >= 15` 棋盘 cap 到 40px cell，其余（包括 9×9 go9、9×10 xiangqi、8×8 国际）走 `CELL_MAX = 80`。在中等分辨率窗口里 go9 cell 实测跑到 80px → 8 格就是 640px，整个棋盘占了窗口一大半。
+2. **方块放置后看不到棋盘纹理**：v0.4.3 的 cube model 只把 board 纹理放在 `up` 面，其余 5 面都用 `oak_planks`。玩家从水平角度看方块时只看得到原木板，跟"物品栏里能看到棋盘图案"形成强对比，第一眼会觉得"纹理没渲染出来"（实际只渲染到了顶部）。
+
+### 变更
+
+#### 棋盘缩放变种感知（`CChessBoardScreen.java`）
+
+- `CELL_MAX` 从 80 → **56**，`CELL_MIN` 从 32 → **20**。
+- `recomputeLayout()` 的 cap 由单一阈值改为按 `variantCols` 分档：
+  - `>= 19`（go19）：24
+  - `>= 15`（gomoku）：32
+  - `>= 9`（xiangqi、go9）：48
+  - 其余（国际 8×8）：56
+
+实测各棋盘最大渲染尺寸（1920×1080 窗口，左 170 + 右 210 + 上 28 + 下 24）：
+
+| 棋盘 | cell | board |
+|---|---|---|
+| go19 (19×19) | 24 | 432 |
+| gomoku (15×15) | 32 | 448 |
+| go9 (9×9) | 48 | 384 |
+| xiangqi (9×10) | 48 | 384 |
+| 国际 (8×8) | 56 | 392 |
+
+棋盘最大边从 720px（go19 @ cell=40）降到 432px，go9 从 640px 降到 384px。所有棋盘最大占屏宽 432px ≈ 22.5%（1920px 屏），给左侧 badge + 右侧按钮面板留足空间。
+
+#### 方块所有面显示棋盘纹理（`models/block/qisheng_{gomoku,go9,go19}.json`）
+
+把 `north` / `south` / `east` / `west` / `particle` 从 `oak_planks` 全部改成各自的 `_top.png`。`down` 仍保持 `oak_planks`（避免从天上看方块底部的尴尬对称问题）。
+
+副作用：现在放置方块后从任意水平角度都能看到棋盘纹理（旋转 90° 仍然能识别棋种），不再像 v0.4.3 那样需要玩家飞到方块正上方才能看到图案。
+
+cchess 方块没改（保持原样，用户没抱怨）。
+
+### 测试
+
+没有逻辑改动 → 没加测试。128 tests 全部继续 PASS。
+
+### 构建
+
+- `:common:compileJava :common:test :fabric:remapJar` → BUILD SUCCESSFUL，128 tests PASSED。
+- jar = `qisheng_chess-fabric-0.4.4.jar` 387589 B（vs 0.4.3 = 387548 B，+41 B = JSON 模型 6 个面各加 `qisheng_chess:block/qisheng_<name>` 引用 + gradle.properties 版本字符串）。
+
+---
+
 ## [0.4.3] — 补齐 v0.4.2 资源 + 修 onPlace 抢跑导致象棋 fallback 失效
 
 目标：用户实测 v0.4.2 反馈三个问题——创造物品栏只有象棋、其他棋盘没材质、`/give` 拿到 gomoku/go9/go19 后右键打开仍是象棋。三个问题全部由 v0.4 的资源遗漏 + v0.4.2 的会话初始化路径 bug 导致。

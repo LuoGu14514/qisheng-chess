@@ -1121,6 +1121,7 @@ git 索引阶段反复卡住：
 - 国际象棋 AI 1-ply 无 alpha-beta（用户接受"无复杂功能"）
 - 走子动画（用户没要求）
 - 服务端没有实机验证（容器限制）
-- `Architectury NetworkManager` 残留引用在测试代码注释里（`ModRegistryTest.java` 等）——非阻塞，下版清理
+- `Architectury NetworkManager` 实际已无代码残留：grep `^import\s+dev\.architectury\.networking` 返回空，`grep 'NetworkManager\.(sendToPlayer|...)'` 仅返回一处 Javadoc `{@code}` 引用（解释为什么我们不用 NetworkManager），无任何调用点。`common/.../test` 下 ARK 引用匹配数为 0（"ModRegistryTest.java" 名字是错的印象，**这个测试类根本不存在**）。原 v0.4.6 §16.10 关于"残留引用"的描述基于不准确的印象，**无需清理**。
+- `dev.architectury.registry.*`（DeferredRegister / RegistrySupplier / CreativeTabRegistry）共 9 处 import 仍在用，是与 `networking` 不同的 API surface（注册项 / creative tab），仍提供跨 loader 抽象。当前 Fabric-only 部署下可换成 `Registry.register` + `FabricItemGroupBuilder` 但属于无紧迫收益的清理——保留。
 - PowerShell cp936 编码问题反复困扰 git push 操作 → 改用 Python (UTF-8) subprocess 包装是当前最稳方案（v0.4.7 路线？）
 

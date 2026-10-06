@@ -99,6 +99,14 @@ public interface BoardVariant {
     boolean canMove(BoardState state, int src, int dst);
 
     /**
+     * True when this variant accepts a single-click placement action instead
+     * of a select→move flow (gomoku, go). Default is {@code false}; placement
+     * variants override this so the server can skip the {@code selectPoint}
+     * matching check in {@code GameLogic.tryMove}.
+     */
+    default boolean isPlacementOnly() { return false; }
+
+    /**
      * Make {@code src → dst} on {@code state} (mutating it). Returns
      * {@code true} on success, {@code false} when the move is illegal /
      *   off-board / exposes the mover's king (in which case {@code state} is

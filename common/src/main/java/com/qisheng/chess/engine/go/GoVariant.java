@@ -185,6 +185,8 @@ public final class GoVariant implements BoardVariant {
         return -1;
     }
 
+    @Override public boolean isPlacementOnly() { return true; }
+
     @Override public boolean canMove(BoardState state, int src, int dst) {
         if (!(state instanceof GoBoard b)) return false;
         // Pass sentinel: src == dst == -1.

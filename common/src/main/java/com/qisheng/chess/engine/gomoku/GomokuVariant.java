@@ -107,6 +107,8 @@ public final class GomokuVariant implements BoardVariant {
         return sq >= 0 && sq < totalSquares();
     }
 
+    @Override public boolean isPlacementOnly() { return true; }
+
     @Override public int indexForFileRank(int file, int rank) {
         return GomokuBoard.sq(file, rank);
     }

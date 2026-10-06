@@ -118,7 +118,11 @@ public final class GameLogic {
         int role = session.getPlayerRole(playerId);
         if (role != session.getSdPlayer()) return MoveOutcome.NOT_YOUR_TURN;
 
-        if (session.getSelectPoint() != src) return MoveOutcome.SOURCE_MISMATCH;
+        // Placement-only variants (gomoku + go) skip the select→move flow:
+        // the client sends a single click as (src == dst) and the server
+        // dispatches straight to applyMove. The selectPoint is never updated
+        // for these variants, so the SOURCE_MISMATCH check must be skipped.
+        if (!session.getVariant().isPlacementOnly() && session.getSelectPoint() != src) return MoveOutcome.SOURCE_MISMATCH;
         return applyMove(session, src, dst);
     }
 

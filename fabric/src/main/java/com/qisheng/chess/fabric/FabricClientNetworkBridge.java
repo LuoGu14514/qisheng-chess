@@ -74,7 +74,6 @@ public final class FabricClientNetworkBridge implements ModNetwork.FabricSender 
      */
     public static void initClient() {
         if (initialized) return;
-        initialized = true;
         ModNetwork.setClientSender(INSTANCE);
         ClientPlayNetworking.registerGlobalReceiver(ModNetwork.CHESS_SYNC,
                 s2c(ChessSyncS2CPacket::receive));
@@ -94,5 +93,6 @@ public final class FabricClientNetworkBridge implements ModNetwork.FabricSender 
                 s2c(SwitchPackets.ResultPacket::receive));
         ClientPlayNetworking.registerGlobalReceiver(ModNetwork.CHESS_CHAT,
                 s2c(ChatPackets.Broadcast::receive));
+        initialized = true;
     }
 }

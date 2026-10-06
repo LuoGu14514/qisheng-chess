@@ -18,12 +18,14 @@ import org.slf4j.LoggerFactory;
  *       仅 client 加载,调用 {@link FabricClientNetworkBridge#initClient()}</li>
  * </ul>
  *
- * <p>本 main entrypoint 还会在两端都尝试通过反射调用两端的 init 方法。Fabric 的
- * {@code server} entrypoint 在 <b>singleplayer (集成服)</b> 模式下不会触发,因为
- * 集成服属于 env=CLIENT;若不在 main 这里也调用 {@code initServer()},用户点击棋盘
- * 时 {@code ModNetwork.sendToPlayer} 会抛 {@code IllegalStateException}("serverSender
- * not yet initialized")、被 silent-catch 吞掉,客户端只看到 "已加入红方" popup,
- * 但 GUI 永远不开。两端 init 方法都已做幂等处理,多次调用安全。
+ * <p>v0.4.11 起,{@link FabricServerNetworkBridge} 已去除
+ * {@code @Environment(EnvType.SERVER)} 注解(否则 Fabric Loader 的 Knot classloader
+ * 会在 singleplayer (env=CLIENT) 上 STRIP 该类,导致 initServer 永远不被调用,
+ * GUI 不开)。本 main entrypoint 现在直接调用 {@code initServer()};其内部的 env gate
+ * 会跳过纯 multiplayer CLIENT 情况(无 SERVER 类在 classpath)。两端 init 方法都做幂等处理。
+ *
+ * <p>{@link FabricClientNetworkBridge} 仍然带 {@code @Environment(EnvType.CLIENT)},
+ * 因此 dedicated server (env=SERVER) 上该类被 Knot 剥离,直接调用会失败,继续用反射。
  */
 public class QishengChessFabric implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger(QishengChess.MOD_ID);
@@ -32,25 +34,32 @@ public class QishengChessFabric implements ModInitializer {
     public void onInitialize() {
         ModRegistry.init();
         FabricEvents.register();
-        tryInvoke("com.qisheng.chess.fabric.FabricServerNetworkBridge", "initServer");
+        // Server init: direct call now works on dedicated + singleplayer.
+        // The env gate inside initServer() bails out on pure multiplayer CLIENT.
+        FabricServerNetworkBridge.initServer();
+        // Client init: must use reflection because on dedicated server the CLIENT
+        // bridge class is still @EnvType(CLIENT) and stripped by Knot.
         tryInvoke("com.qisheng.chess.fabric.FabricClientNetworkBridge", "initClient");
         LOGGER.info("[" + QishengChess.MOD_ID + "] Fabric mod initialized");
     }
 
     /**
-     * 通过反射调用 env-specific 的 init 方法。失败时只记录 warning,绝不抛出:
-     * 在 dedicated server 上 {@code FabricClientNetworkBridge} 类因
+     * 通过反射调用 env-specific 的 init 方法。失败时记录 warning 以便诊断:
+     * 在 dedicated server (env=SERVER) 上 {@code FabricClientNetworkBridge} 类因
      * {@link net.fabricmc.api.Environment EnvType.CLIENT} 标注被剥离,
-     * Class.forName 会抛 {@code ClassNotFoundException},这是预期行为。
+     * Class.forName 会抛 {@code RuntimeException("Cannot load class ...")},
+     * 这是预期行为 — dedicated server 没有客户端。
      */
     private static void tryInvoke(String className, String methodName) {
         try {
-            Class.forName(className).getMethod(methodName).invoke(null);
-        } catch (ClassNotFoundException | NoSuchMethodException e) {
-            // 在错侧 env 类被剥离时正常发生;无需打扰用户。
-            LOGGER.debug("[{}] skipped {} (env-stripped): {}", QishengChess.MOD_ID, methodName, e.toString());
+            Class<?> cls = Class.forName(className);
+            LOGGER.info("[{}] resolved {} -> {}", QishengChess.MOD_ID, className, cls.getName());
+            cls.getMethod(methodName).invoke(null);
+            LOGGER.info("[{}] invoked {}.{} OK", QishengChess.MOD_ID, className, methodName);
         } catch (Throwable t) {
-            LOGGER.warn("[{}] failed to call {}.{} via reflection", QishengChess.MOD_ID, className, methodName, t);
+            // On dedicated server, FabricClientNetworkBridge is env-stripped; we just log info-level.
+            // On singleplayer CLIENT, FabricClientNetworkBridge IS loadable; initClient() runs.
+            LOGGER.info("[{}] skipped {}.{}: {}", QishengChess.MOD_ID, className, methodName, t.toString());
         }
     }
 }

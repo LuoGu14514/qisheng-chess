@@ -213,6 +213,28 @@ class GoVariantTest {
     }
 
     @Test
+    @DisplayName("go19 koSquare 在 rank 10..19 (FEN 'a'..'j') round-trip 正确")
+    void fenRoundTripGo19KoSquareHighRank() {
+        // 回归测试:rank 10-19 的 koSquare 必须编码成 'a'..'j' 才能 round-trip
+        // 之前的 charAt(1)-'1' 实现只接受 '1'..'9',会把 koSquare 丢光
+        for (int rank = 9; rank < 19; rank++) {  // internal rank 9..18 = FEN rank 10..19
+            BoardState s = V19.initialState();
+            GoBoard b = (GoBoard) s;
+            int sq = V19.indexForFileRank(3, rank);  // d10..d19
+            b.koSquare = sq;
+            String fen = V19.toFen(s);
+            BoardState back = V19.parseState(fen);
+            assertNotNull(back, "FEN 解析失败 for rank " + rank + ": " + fen);
+            GoBoard bb = (GoBoard) back;
+            assertEquals(sq, bb.koSquare, "koSquare round-trip 错 for rank " + rank);
+        }
+        // go9 不接受 2 字符 rank —— 'a1' 是 file=0, rank=0 (合法 9x9 坐标)
+        // 用 'aa' 才能触发 2 字符 rank 拒绝 (charAt(1)='a' 不在 '1'..'9' 也不在 go9 允许范围)
+        String go9Fen = "........./........./........./........./........./........./........./........./......... b 0 aa 0 0";
+        assertEquals(null, V9.parseState(go9Fen), "go9 应该拒绝 'aa' 这种 2 字符 rank");
+    }
+
+    @Test
     @DisplayName("parseState 拒绝错形状 FEN")
     void parseStateRejectsJunk() {
         // 字段数不够

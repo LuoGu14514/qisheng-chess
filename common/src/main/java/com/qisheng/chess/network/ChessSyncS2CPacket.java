@@ -1,6 +1,7 @@
 package com.qisheng.chess.network;
 
 import com.qisheng.chess.client.CChessBoardScreen;
+import com.qisheng.chess.engine.BoardRegistry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -61,13 +62,14 @@ public class ChessSyncS2CPacket {
         }
     }
 
-    /** Resolve variantId → bitmap size without going through BoardRegistry (client has no engine module). */
+    /**
+     * Resolve variantId → bitmap size via the engine registry. We must use the
+     * server's exact {@link com.qisheng.chess.engine.BoardVariant#totalSquares()}
+     * so the bitmap read lines up with what was written. A hardcoded switch that
+     * only knows xiangqi/international causes every other variant to desync the
+     * byte stream — sync then throws and {@code applySync} is never called.
+     */
     private static int totalSquaresFor(String variantId) {
-        if (variantId == null) return 256;
-        return switch (variantId) {
-            case "xiangqi" -> 256;
-            case "international" -> 64;
-            default -> 256;
-        };
+        return BoardRegistry.getByIdOrDefault(variantId).totalSquares();
     }
 }

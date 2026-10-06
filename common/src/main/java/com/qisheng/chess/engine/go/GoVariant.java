@@ -133,13 +133,14 @@ public final class GoVariant implements BoardVariant {
         catch (NumberFormatException e) { return null; }
         if (passes < 0 || passes > 2) return null;
         b.passes = passes;
-        // koSquare
+        // koSquare — for go19 the rank encoding switches to a lowercase
+        // letter at rank 10 ('a'..'j'); go9 only ever uses digits.
         if (!parts[3].equals("-") && !parts[3].isEmpty()) {
             String ks = parts[3];
             if (ks.length() != 2) return null;
             int kf = ks.charAt(0) - 'a';
-            int kr = ks.charAt(1) - '1';
-            if (kf < 0 || kf >= size || kr < 0 || kr >= size) return null;
+            int kr = parseRankChar(ks.charAt(1), size);
+            if (kf < 0 || kf >= size || kr < 0) return null;
             b.koSquare = b.sq(kf, kr);
         } else {
             b.koSquare = -1;
@@ -251,11 +252,31 @@ public final class GoVariant implements BoardVariant {
             sb.append('-');
         } else {
             int kf = b.fileOf(b.koSquare), kr = b.rankOf(b.koSquare);
-            sb.append((char) ('a' + kf)).append(kr + 1);
+            sb.append((char) ('a' + kf)).append(formatRankChar(kr));
         }
         sb.append(' ').append(b.blackCaptures);
         sb.append(' ').append(b.whiteCaptures);
         return sb.toString();
+    }
+
+    /** Rank encoding: ranks 1-9 emit '1'..'9'; for go19, ranks 10-19 emit
+     *  'a'..'j' (a custom two-character-rank extension that keeps the FEN
+     *  line unambiguous for boards up to 19x19). For sizes <= 9 only digits
+     *  are accepted; 'a'..'j' is rejected. */
+    private static int parseRankChar(char c, int size) {
+        if (c >= '1' && c <= '9') {
+            int r = c - '1';
+            return r < size ? r : -1;
+        }
+        if (size > 9 && c >= 'a' && c <= ('a' + size - 10)) {
+            return c - 'a' + 9;
+        }
+        return -1;
+    }
+
+    private static char formatRankChar(int rank) {
+        if (rank < 9) return (char) ('1' + rank);
+        return (char) ('a' + rank - 9);
     }
 
     @Override public int sideToMove(BoardState state) {

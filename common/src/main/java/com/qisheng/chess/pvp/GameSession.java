@@ -4,6 +4,10 @@ import com.qisheng.chess.engine.BoardRegistry;
 import com.qisheng.chess.engine.BoardState;
 import com.qisheng.chess.engine.BoardVariant;
 import com.qisheng.chess.engine.ChineseChessEngine;
+import com.qisheng.chess.engine.gomoku.GomokuBoard;
+import com.qisheng.chess.engine.gomoku.GomokuVariant;
+import com.qisheng.chess.engine.go.GoBoard;
+import com.qisheng.chess.engine.go.GoVariant;
 import com.qisheng.chess.engine.international.InternationalChessVariant;
 import com.qisheng.chess.engine.international.IntChessBoard;
 import com.qisheng.chess.engine.xiangqi.XiangqiVariant;
@@ -228,19 +232,40 @@ public class GameSession {
         BoardState state = boardState;
 
         if (v.isCheckmate(state)) {
+            // Gomoku and Go encode the winner on the board itself; the
+            // sdPlayer-flip trick that works for Xiangqi (where the mated
+            // side has no legal moves) does NOT work here — after Black wins
+            // a Gomoku game, sdPlayer has flipped to 1 (White's turn), and the
+            // naive sdPlayer-flip below would declare Red the victor.
+            if (v instanceof GomokuVariant && state instanceof GomokuBoard g) {
+                if (g.winner == GomokuBoard.BLACK) return GameResult.BLACK_WIN;
+                if (g.winner == GomokuBoard.WHITE) return GameResult.RED_WIN;
+            }
+            if (v instanceof GoVariant && state instanceof GoBoard gb) {
+                // Chinese area scoring: blackScore - whiteScore (white gets
+                // KOMI as a base offset inside scoreDelta). A draw under the
+                // current Go rules is impossible; tie → black wins by seat.
+                double delta = ((GoVariant) v).scoreDelta(gb);
+                if (delta > 0) return GameResult.BLACK_WIN;
+                if (delta < 0) return GameResult.RED_WIN;
+                return GameResult.BLACK_WIN;
+            }
+            // Xiangqi (and any future chess-like variant where the losing
+            // side is sdPlayer because the loser has no legal moves).
             return sdPlayer == 0 ? GameResult.BLACK_WIN : GameResult.RED_WIN;
         }
 
         // Variant-specific draw rules:
         //   - Xiangqi has threefold / move-limit drawn through the xqwlight
-        //     board's own counters (repStatus + distance).
-        //   - International chess has the 50-move rule (halfmoveClock >= 100).
+        //     board's own counters (repStatus + distance). The instanceof
+        //     dispatch is here only because isStalemate() returns false for
+        //     xiangqi on purpose — bare stalemate is a perpetual-check loss.
+        //   - International chess: threefold repetition, insufficient
+        //     material, and 50-move rule all live inside
+        //     InternationalChessVariant.isStalemate() — no separate branch.
         if (v instanceof XiangqiVariant && state instanceof Position p) {
             if (CChessUtil.isRepeat(p)) return GameResult.DRAW;
             if (CChessUtil.reachMoveLimit(p)) return GameResult.DRAW;
-        }
-        if (v instanceof InternationalChessVariant && state instanceof IntChessBoard b) {
-            if (b.halfmoveClock >= 100) return GameResult.DRAW;
         }
 
         if (v.isStalemate(state)) return GameResult.DRAW;

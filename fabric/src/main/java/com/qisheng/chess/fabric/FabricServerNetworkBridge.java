@@ -64,12 +64,30 @@ public final class FabricServerNetworkBridge implements ModNetwork.FabricSender 
         return new C2SHandler(body);
     }
 
+    private static volatile boolean initialized = false;
+
     /**
-     * Server init. Called from {@code QishengChessFabricServer.onInitialize} (a
-     * dedicated {@code server} entrypoint so the "main" entrypoint stays free of
-     * env-specific references and the class is never resolved on the client).
+     * Server init. <b>Idempotent</b>: registering the same global receiver twice
+     * would fail on Fabric, and the {@code FabricServerNetworkBridge#INSTANCE} class
+     * cannot be reassigned safely — instead we set it once and skip re-registration
+     * on subsequent calls. The method is invoked from two entrypoints:
+     * <ul>
+     *   <li>{@code QishengChessFabricServer.onInitializeServer} —
+     *       dedicated server (env=SERVER); {@code server} entrypoint fires.</li>
+     *   <li>{@code QishengChessFabric.onInitialize} —
+     *       <b>singleplayer</b> (integrated server in the same JVM, env=CLIENT);
+     *       {@code server} entrypoint does NOT fire, so we MUST init here or the
+     *       user sees the "已加入红方" popup but no GUI (sendOpenScreen throws
+     *       "serverSender not yet initialized" silently).</li>
+     * </ul>
+     * On a pure multiplayer client (no integrated server, connecting to remote
+     * server) this still fires harmlessly: the local registration simply has no
+     * server in this JVM to register against, so no packets are intercepted here.
+     * The remote server has its own receiver registrations.
      */
     public static void initServer() {
+        if (initialized) return;
+        initialized = true;
         ModNetwork.setServerSender(INSTANCE);
         ServerPlayNetworking.registerGlobalReceiver(ModNetwork.CHESS_INTERACT,
                 c2s(ChessInteractC2SPacket::receive));

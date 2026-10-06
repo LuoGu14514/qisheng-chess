@@ -64,8 +64,17 @@ public final class FabricClientNetworkBridge implements ModNetwork.FabricSender 
         return new S2CHandler(body);
     }
 
-    /** Client init. Called from {@code QishengChessFabricClient.onInitializeClient}. */
+    private static volatile boolean initialized = false;
+
+    /**
+     * Client init. <b>Idempotent</b>: called from {@code QishengChessFabricClient.onInitializeClient}
+     * (the {@code client} entrypoint) AND, defensively, from {@code QishengChessFabric.onInitialize}
+     * (the {@code main} entrypoint) so a missing client entrypoint never leaves the
+     * client sender as the throwing placeholder.
+     */
     public static void initClient() {
+        if (initialized) return;
+        initialized = true;
         ModNetwork.setClientSender(INSTANCE);
         ClientPlayNetworking.registerGlobalReceiver(ModNetwork.CHESS_SYNC,
                 s2c(ChessSyncS2CPacket::receive));

@@ -10,6 +10,7 @@
     "environment": "*",
     "entrypoints": {
         "main": ["com.qisheng.chess.fabric.QishengChessFabric"],
+        "server": ["com.qisheng.chess.fabric.QishengChessFabricServer"],
         "client": ["com.qisheng.chess.fabric.client.QishengChessFabricClient"]
     },
     "depends": {

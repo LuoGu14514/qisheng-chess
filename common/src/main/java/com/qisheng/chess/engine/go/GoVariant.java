@@ -185,7 +185,48 @@ public final class GoVariant implements BoardVariant {
         return -1;
     }
 
-    @Override public boolean isPlacementOnly() { return true; }
+    @Override public boolean isPlacement() { return true; }
+
+    @Override public boolean canPlace(BoardState state, int sq) {
+        if (!(state instanceof GoBoard b)) return false;
+        if (!isValidSquare(sq)) return false;
+        if (b.finished) return false;
+        if (b.squares[sq] != GoBoard.EMPTY) return false;
+        if (sq == b.koSquare) return false;    // simple ko guard
+        return placementLeavesLiberty(b, sq);
+    }
+
+    @Override public boolean applyPlace(BoardState state, int sq) {
+        if (!(state instanceof GoBoard b)) return false;
+        if (!canPlace(state, sq)) return false;
+        byte stone = (byte) (b.sdPlayer == 0 ? GoBoard.BLACK : GoBoard.WHITE);
+        byte oppStone = (byte) (b.sdPlayer == 0 ? GoBoard.WHITE : GoBoard.BLACK);
+        b.squares[sq] = stone;
+        int capturedCount = 0;
+        int singleCaptureSq = -1;
+        // Capture opponent groups adjacent to sq with no liberties.
+        int[] adj = adjacent(b, sq);
+        for (int a : adj) {
+            if (b.squares[a] != oppStone) continue;
+            if (groupHasLiberty(b, a)) continue;
+            int removed = removeGroup(b, a);
+            capturedCount += removed;
+            singleCaptureSq = a;
+        }
+        if (b.sdPlayer == 0) b.blackCaptures += capturedCount;
+        else                  b.whiteCaptures += capturedCount;
+        // Ko rule: a move that captures exactly one stone, leaving that
+        // square empty and only the placed stone on its own, sets koSquare
+        // to the captured square — the standard simple-ko shape.
+        if (capturedCount == 1 && groupHasOnlyOneStone(b, sq)) {
+            b.koSquare = singleCaptureSq;
+        } else {
+            b.koSquare = -1;
+        }
+        b.passes = 0;
+        b.sdPlayer = 1 - b.sdPlayer;
+        return true;
+    }
 
     @Override public boolean canMove(BoardState state, int src, int dst) {
         if (!(state instanceof GoBoard b)) return false;

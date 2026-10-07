@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
 import java.util.UUID;
 
 /**
- * C2S packet for join / select / move actions.
+ * C2S packet for join / select / move / place actions.
  *
  * <p>All user prompts flow through {@link GameBroadcaster#sendPopupTo}
  * so the player sees them as centred in-GUI overlays instead of chat
@@ -35,12 +35,23 @@ import java.util.UUID;
  *
  * <p><b>这个包里的坐标完全来自客户端</b>,所以每一个动作都要先过三关:
  * <ol>
- *   <li>动作编号必须是 {@link #ACTION_JOIN} / {@link #ACTION_SELECT} / {@link #ACTION_MOVE}</li>
+ *   <li>动作编号必须是 {@link #ACTION_JOIN} / {@link #ACTION_SELECT} /
+ *       {@link #ACTION_MOVE} / {@link #ACTION_PASS} / {@link #ACTION_PLACE}</li>
  *   <li>{@code pos} 处必须真的是 {@link CChessBoardBlock}(否则静默丢弃,
  *       不能让恶意客户端拿任意 BlockPos 去操作别人的棋盘)</li>
  *   <li>玩家必须站在棋盘旁({@link SessionManager#isPlayerNear})</li>
  * </ol>
  * 载荷长度也要先查再读:截断/畸形的包不允许把异常抛出处理器。
+ *
+ * <p>动作路由:
+ * <ul>
+ *   <li>{@code ACTION_MOVE}:象棋/国际象棋的 (src, dst) 走子</li>
+ *   <li>{@code ACTION_PLACE}:五子棋/围棋的单格下子(载荷只有 1 个 short)</li>
+ *   <li>{@code ACTION_PASS}:围棋的虚手(无载荷)</li>
+ * </ul>
+ * {@code ACTION_MOVE} 不再被五子棋/围棋借用(src == dst);这两个变种只走
+ * {@code ACTION_PLACE}。这样棋盘的"下子"语义和数据载荷都跟象棋走子分开,
+ * 未来加 Othello 这类纯下子变种时也只需这一个动作号。
  */
 public class ChessInteractC2SPacket {
 
@@ -50,6 +61,7 @@ public class ChessInteractC2SPacket {
     public static final int ACTION_SELECT = 1;
     public static final int ACTION_MOVE = 2;
     public static final int ACTION_PASS = 3;
+    public static final int ACTION_PLACE = 4;
 
     public static void receive(FriendlyByteBuf buf, ServerPlayer player) {
         if (player == null) return;
@@ -59,7 +71,8 @@ public class ChessInteractC2SPacket {
         int action = buf.readByte();
 
         // 未知动作:记一条日志就走,不回包(免得把服务端当探针用)。
-        if (action != ACTION_JOIN && action != ACTION_SELECT && action != ACTION_MOVE && action != ACTION_PASS) {
+        if (action != ACTION_JOIN && action != ACTION_SELECT && action != ACTION_MOVE
+                && action != ACTION_PASS && action != ACTION_PLACE) {
             LOG.warn("[qisheng] Player {} sent unknown board interaction action {} @ {}",
                     player.getName().getString(), action, pos);
             return;
@@ -100,6 +113,12 @@ public class ChessInteractC2SPacket {
                 handleMove(player, boardLevel, session, pos, buf.readShort(), buf.readShort());
             }
             case ACTION_PASS -> handlePass(player, boardLevel, session, pos);
+            case ACTION_PLACE -> {
+                // Placement payload is a single square index (no src); gomoku and
+                // go use this instead of ACTION_MOVE with src == dst.
+                if (buf.readableBytes() < Short.BYTES) return;
+                handlePlace(player, boardLevel, session, pos, buf.readShort());
+            }
         }
     }
 
@@ -216,6 +235,26 @@ public class ChessInteractC2SPacket {
         } else {
             GameBroadcaster.sendPopupTo(player, GameMessages.describeMove(out),
                     PopupS2CPacket.Severity.WARN, 3);
+        }
+    }
+
+    private static void handlePlace(ServerPlayer player, ServerLevel boardLevel, GameSession session,
+                                    BlockPos pos, int sq) {
+        GameLogic.MoveOutcome out = GameLogic.tryPlace(session, player.getUUID(), sq);
+        switch (out) {
+            case OK -> {
+                GameResult result = session.getResult();
+                if (result != GameResult.ONGOING) {
+                    GameBroadcaster.broadcastGameOver(boardLevel, session, pos, result);
+                } else {
+                    GameBroadcaster.broadcastSync(boardLevel, session, pos);
+                }
+            }
+            default -> {
+                GameBroadcaster.broadcastSync(boardLevel, session, pos);
+                GameBroadcaster.sendPopupTo(player, GameMessages.describeMove(out),
+                        PopupS2CPacket.Severity.WARN, 3);
+            }
         }
     }
 

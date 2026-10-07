@@ -101,10 +101,11 @@ public interface BoardVariant {
     /**
      * True when this variant accepts a single-click placement action instead
      * of a select→move flow (gomoku, go). Default is {@code false}; placement
-     * variants override this so the server can skip the {@code selectPoint}
-     * matching check in {@code GameLogic.tryMove}.
+     * variants override this so the server can route clicks through
+     * {@link #canPlace} / {@link #applyPlace} and the client can send
+     * {@code ACTION_PLACE} instead of {@code ACTION_MOVE}.
      */
-    default boolean isPlacementOnly() { return false; }
+    default boolean isPlacement() { return false; }
 
     /**
      * Make {@code src → dst} on {@code state} (mutating it). Returns
@@ -113,6 +114,23 @@ public interface BoardVariant {
      *   left exactly as it was).
      */
     boolean applyMove(BoardState state, int src, int dst);
+
+    /**
+     * True when dropping a stone at {@code sq} is legal for the side to
+     * move. Defaults to {@code false}; placement variants (gomoku, go)
+     * override. {@link #applyPlace} is expected to be a no-op when this
+     * returns {@code false}.
+     */
+    default boolean canPlace(BoardState state, int sq) { return false; }
+
+    /**
+     * Drop a stone at {@code sq} on {@code state} (mutating it). Returns
+     * {@code true} on success, {@code false} when the placement is illegal
+     * (occupied square, suicide, simple-ko, …) — in which case {@code state}
+     * is left exactly as it was. Defaults to {@code false}; placement
+     * variants override.
+     */
+    default boolean applyPlace(BoardState state, int sq) { return false; }
 
     /** The variant's FEN string for the current position. */
     String toFen(BoardState state);

@@ -78,6 +78,7 @@ public class CChessBoardScreen extends Screen {
     private static final int ACTION_SELECT = 1;
     private static final int ACTION_MOVE   = 2;
     private static final int ACTION_PASS   = 3;
+    private static final int ACTION_PLACE  = 4;
 
     /** Sentinel square index used by Go to represent a pass (no stone placed). */
     private static final int PASS_SQ = -1;
@@ -1469,18 +1470,14 @@ public class CChessBoardScreen extends Screen {
         byte pc = (bs != null) ? v.pieceAt(bs, sq) : 0;
 
         // Placement variants (gomoku + go): a single click places a stone.
-        // The server treats src == dst as a placement request (GomokuVariant
-        // and GoVariant both accept that) and rejects only illegal drops
-        // (occupied / suicide / ko). The client doesn't need to track a
-        // separate selection state, so this whole path skips the
-        // select→move dance used by xiangqi.
+        // The wire action is ACTION_PLACE (1 square arg) so the server's
+        // placement logic never has to share code with the xiangqi/chess
+        // move flow. Passes go through the dedicated ACTION_PASS path
+        // (the action button below the board).
         if (isPlacementVariant()) {
             // Place only on an empty square; occupied squares do nothing.
-            // If the player tries to play a pass for go, that comes through
-            // the dedicated pass button (added below the action panel in a
-            // later release).
             if (pc == 0) {
-                sendInteract(ACTION_MOVE, sq, sq);
+                sendInteract(ACTION_PLACE, sq, 0);
             }
             return;
         }
@@ -1509,7 +1506,8 @@ public class CChessBoardScreen extends Screen {
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         buf.writeBlockPos(boardPos);
         buf.writeByte(action);
-        if (action == ACTION_SELECT) {
+        if (action == ACTION_SELECT || action == ACTION_PLACE) {
+            // Both carry a single square index; the second int is unused.
             buf.writeShort(a);
         } else if (action == ACTION_MOVE) {
             buf.writeShort(a);

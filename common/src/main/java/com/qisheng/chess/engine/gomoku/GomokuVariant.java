@@ -107,7 +107,25 @@ public final class GomokuVariant implements BoardVariant {
         return sq >= 0 && sq < totalSquares();
     }
 
-    @Override public boolean isPlacementOnly() { return true; }
+    @Override public boolean isPlacement() { return true; }
+
+    @Override public boolean canPlace(BoardState state, int sq) {
+        if (!(state instanceof GomokuBoard b)) return false;
+        if (!isValidSquare(sq)) return false;
+        if (b.squares[sq] != GomokuBoard.EMPTY) return false;
+        if (b.winner != GomokuBoard.EMPTY) return false;
+        return true;
+    }
+
+    @Override public boolean applyPlace(BoardState state, int sq) {
+        if (!(state instanceof GomokuBoard b)) return false;
+        if (!canPlace(state, sq)) return false;
+        b.squares[sq] = (byte) (b.sdPlayer == 0 ? GomokuBoard.BLACK : GomokuBoard.WHITE);
+        b.moveCount++;
+        b.winner = detectWinner(b);
+        b.sdPlayer = 1 - b.sdPlayer;
+        return true;
+    }
 
     @Override public int indexForFileRank(int file, int rank) {
         return GomokuBoard.sq(file, rank);

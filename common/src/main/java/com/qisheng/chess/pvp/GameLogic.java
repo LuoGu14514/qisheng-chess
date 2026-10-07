@@ -118,12 +118,54 @@ public final class GameLogic {
         int role = session.getPlayerRole(playerId);
         if (role != session.getSdPlayer()) return MoveOutcome.NOT_YOUR_TURN;
 
-        // Placement-only variants (gomoku + go) skip the select→move flow:
-        // the client sends a single click as (src == dst) and the server
-        // dispatches straight to applyMove. The selectPoint is never updated
-        // for these variants, so the SOURCE_MISMATCH check must be skipped.
-        if (!session.getVariant().isPlacementOnly() && session.getSelectPoint() != src) return MoveOutcome.SOURCE_MISMATCH;
+        if (session.getSelectPoint() != src) return MoveOutcome.SOURCE_MISMATCH;
         return applyMove(session, src, dst);
+    }
+
+    /**
+     * Execute a placement action (gomoku / go). Distinct from
+     * {@link #tryMove} so the packet on the wire has a single-square payload
+     * ({@code ACTION_PLACE}) instead of borrowing {@code ACTION_MOVE} with
+     * {@code src == dst} — see {@link com.qisheng.chess.network.ChessInteractC2SPacket#ACTION_PLACE}.
+     *
+     * <p>Variants that are not placement variants return {@code ILLEGAL_MOVE}
+     * — there is no equivalent fallback. Clients are expected to send
+     * {@code ACTION_PLACE} only for gomoku and go.
+     */
+    public static MoveOutcome tryPlace(GameSession session, UUID playerId, int sq) {
+        if (session == null) return MoveOutcome.NOT_IN_GAME;
+        GameState state = session.getState();
+        if (state == GameState.FINISHED) return MoveOutcome.GAME_FINISHED;
+        if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
+
+        int role = session.getPlayerRole(playerId);
+        if (role < 0) return MoveOutcome.NOT_IN_GAME;
+        if (role != session.getSdPlayer()) return MoveOutcome.NOT_YOUR_TURN;
+
+        BoardVariant v = session.getVariant();
+        if (!v.isPlacement()) return MoveOutcome.ILLEGAL_MOVE;
+
+        BoardState bs = session.getBoardState();
+        if (!v.isValidSquare(sq)) return MoveOutcome.OUT_OF_BOUNDS;
+        if (!v.canPlace(bs, sq)) return MoveOutcome.ILLEGAL_MOVE;
+        if (!v.applyPlace(bs, sq)) return MoveOutcome.ILLEGAL_MOVE;
+
+        // Placement variants don't track a selectPoint the way select→move
+        // variants do: every click is independent. Reset it to keep the
+        // client deselect visualisation consistent.
+        session.setSelectPoint(-1);
+        // The "src" of a placement has no meaningful index, but the GUI uses
+        // lastMoveSrc/Dst to draw the ring; record dst only.
+        session.setLastMoveSource(-1);
+        session.setLastMoveDest(sq);
+        session.setSdPlayer(1 - session.getSdPlayer());
+
+        GameResult result = session.checkGameOver();
+        if (result != GameResult.ONGOING) {
+            session.setResult(result);
+            session.setState(GameState.FINISHED);
+        }
+        return MoveOutcome.OK;
     }
 
     /**
@@ -145,6 +187,35 @@ public final class GameLogic {
         if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
         if (!session.isComputerToMove()) return MoveOutcome.NOT_YOUR_TURN;
         return applyMove(session, src, dst);
+    }
+
+    /**
+     * Execute a placement action for the computer opponent (gomoku / go).
+     * Mirror of {@link #tryEngineMove} for placement variants — no seat
+     * check (computer owns no seat), no selection state to match against.
+     */
+    public static MoveOutcome tryEnginePlace(GameSession session, int sq) {
+        if (session == null) return MoveOutcome.NOT_IN_GAME;
+        GameState state = session.getState();
+        if (state == GameState.FINISHED) return MoveOutcome.GAME_FINISHED;
+        if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
+        if (!session.isComputerToMove()) return MoveOutcome.NOT_YOUR_TURN;
+        BoardVariant v = session.getVariant();
+        if (!v.isPlacement()) return MoveOutcome.ILLEGAL_MOVE;
+        BoardState bs = session.getBoardState();
+        if (!v.isValidSquare(sq)) return MoveOutcome.OUT_OF_BOUNDS;
+        if (!v.canPlace(bs, sq)) return MoveOutcome.ILLEGAL_MOVE;
+        if (!v.applyPlace(bs, sq)) return MoveOutcome.ILLEGAL_MOVE;
+        session.setSelectPoint(-1);
+        session.setLastMoveSource(-1);
+        session.setLastMoveDest(sq);
+        session.setSdPlayer(1 - session.getSdPlayer());
+        GameResult result = session.checkGameOver();
+        if (result != GameResult.ONGOING) {
+            session.setResult(result);
+            session.setState(GameState.FINISHED);
+        }
+        return MoveOutcome.OK;
     }
 
     /**

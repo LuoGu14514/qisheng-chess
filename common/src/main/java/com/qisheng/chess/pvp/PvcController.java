@@ -265,7 +265,20 @@ public final class PvcController {
 
     private static GameLogic.MoveOutcome apply(GameSession session, Move move) {
         if (move.src() < 0 || move.dst() < 0) return GameLogic.MoveOutcome.ILLEGAL_MOVE;
-        return GameLogic.tryEngineMove(session, move.src(), move.dst());
+        // Placement variants (gomoku + go) return Move(sq, sq) from the
+        // engine — the human sent ACTION_PLACE and got a single square back,
+        // so the engine's reply is also single-square. Route through the
+        // placement variant of the rules; canPlace()/applyPlace() do the
+        // legality and mutation, no SOURCE_MISCAME gate needed.
+        return tryEngine(session, move.src(), move.dst());
+    }
+
+    /** Dispatch placement vs move engines without duplicating the seat / state gates. */
+    private static GameLogic.MoveOutcome tryEngine(GameSession session, int src, int dst) {
+        if (BoardRegistry.getByIdOrDefault(session.getVariantId()).isPlacement()) {
+            return GameLogic.tryEnginePlace(session, dst);
+        }
+        return GameLogic.tryEngineMove(session, src, dst);
     }
 
     private static String describe(Move move) {

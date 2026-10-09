@@ -75,12 +75,12 @@ class GoVariantTest {
     void basicPlacementAndSdFlip() {
         BoardState state = V9.initialState();
         int e5 = V9.indexForFileRank(4, 4);
-        assertTrue(V9.canMove(state, e5, e5));
-        assertTrue(V9.applyMove(state, e5, e5));
+        assertTrue(V9.canPlace(state, e5));
+        assertTrue(V9.applyPlace(state, e5));
         assertEquals(GoBoard.BLACK, V9.pieceAt(state, e5));
         assertEquals(1, V9.sideToMove(state));
         int a1 = V9.indexForFileRank(0, 0);
-        assertTrue(V9.applyMove(state, a1, a1));
+        assertTrue(V9.applyPlace(state, a1));
         assertEquals(GoBoard.WHITE, V9.pieceAt(state, a1));
         assertEquals(0, V9.sideToMove(state));
     }
@@ -93,21 +93,21 @@ class GoVariantTest {
         // 然后 sdPlayer=1 白手,白下 (2,2) c3 → 自杀被拒
         BoardState s = V9.initialState();
         // 黑 (2,1)
-        V9.applyMove(s, V9.indexForFileRank(2, 1), V9.indexForFileRank(2, 1));
+        V9.applyPlace(s, V9.indexForFileRank(2, 1));
         // 白 (4,4)
-        V9.applyMove(s, V9.indexForFileRank(4, 4), V9.indexForFileRank(4, 4));
+        V9.applyPlace(s, V9.indexForFileRank(4, 4));
         // 黑 (2,3)
-        V9.applyMove(s, V9.indexForFileRank(2, 3), V9.indexForFileRank(2, 3));
+        V9.applyPlace(s, V9.indexForFileRank(2, 3));
         // 白 (4,5)
-        V9.applyMove(s, V9.indexForFileRank(4, 5), V9.indexForFileRank(4, 5));
+        V9.applyPlace(s, V9.indexForFileRank(4, 5));
         // 黑 (1,2)
-        V9.applyMove(s, V9.indexForFileRank(1, 2), V9.indexForFileRank(1, 2));
+        V9.applyPlace(s, V9.indexForFileRank(1, 2));
         // 白 (4,6)
-        V9.applyMove(s, V9.indexForFileRank(4, 6), V9.indexForFileRank(4, 6));
+        V9.applyPlace(s, V9.indexForFileRank(4, 6));
         // 黑 (3,2)
-        V9.applyMove(s, V9.indexForFileRank(3, 2), V9.indexForFileRank(3, 2));
+        V9.applyPlace(s, V9.indexForFileRank(3, 2));
         // 白手 sdPlayer=1,白下 c3 (2,2) 自杀被拒
-        assertFalse(V9.canMove(s, V9.indexForFileRank(2, 2), V9.indexForFileRank(2, 2)));
+        assertFalse(V9.canPlace(s, V9.indexForFileRank(2, 2)));
     }
 
     // ---- Capture ----
@@ -119,21 +119,21 @@ class GoVariantTest {
         // 步骤:1 黑 c4 / 2 白 任意 / 3 黑 e4 / 4 白 任意 / 5 黑 d5 / 6 白 d4 / 7 黑 d3
         BoardState s = V9.initialState();
         // 1 黑 c4 (2,3)
-        assertTrue(V9.applyMove(s, V9.indexForFileRank(2, 3), V9.indexForFileRank(2, 3)));
+        assertTrue(V9.applyPlace(s, V9.indexForFileRank(2, 3)));
         // 2 白 任意 (5,5)
-        assertTrue(V9.applyMove(s, V9.indexForFileRank(5, 5), V9.indexForFileRank(5, 5)));
+        assertTrue(V9.applyPlace(s, V9.indexForFileRank(5, 5)));
         // 3 黑 e4 (4,3)
-        assertTrue(V9.applyMove(s, V9.indexForFileRank(4, 3), V9.indexForFileRank(4, 3)));
+        assertTrue(V9.applyPlace(s, V9.indexForFileRank(4, 3)));
         // 4 白 任意 (5,6)
-        assertTrue(V9.applyMove(s, V9.indexForFileRank(5, 6), V9.indexForFileRank(5, 6)));
+        assertTrue(V9.applyPlace(s, V9.indexForFileRank(5, 6)));
         // 5 黑 d5 (3,4)
-        assertTrue(V9.applyMove(s, V9.indexForFileRank(3, 4), V9.indexForFileRank(3, 4)));
+        assertTrue(V9.applyPlace(s, V9.indexForFileRank(3, 4)));
         // 此时 sdPlayer=1 (白),白下 d4 (3,3):周 (2,3)黑,(4,3)黑,(3,2)空,(3,4)黑 → 1 气 → 合法
-        assertTrue(V9.applyMove(s, V9.indexForFileRank(3, 3), V9.indexForFileRank(3, 3)));
+        assertTrue(V9.applyPlace(s, V9.indexForFileRank(3, 3)));
         // 此时 sdPlayer=0 (黑),黑下 d3 (3,2):吃白 d4
         GoBoard beforeCap = (GoBoard) s;
         int beforeCount = beforeCap.blackCaptures;
-        assertTrue(V9.applyMove(s, V9.indexForFileRank(3, 2), V9.indexForFileRank(3, 2)));
+        assertTrue(V9.applyPlace(s, V9.indexForFileRank(3, 2)));
         GoBoard afterCap = (GoBoard) s;
         assertEquals(1, afterCap.blackCaptures - beforeCount);
         // d4 应该是空了
@@ -166,7 +166,7 @@ class GoVariantTest {
         BoardState state = V9.initialState();
         GoBoard b = (GoBoard) state;
         b.passes = 1;  // 模拟已经 pass 过一次
-        V9.applyMove(state, V9.indexForFileRank(4, 4), V9.indexForFileRank(4, 4));
+        V9.applyPlace(state, V9.indexForFileRank(4, 4));
         assertEquals(0, b.passes);
     }
 
@@ -176,7 +176,7 @@ class GoVariantTest {
         BoardState state = V9.initialState();
         GoBoard b = (GoBoard) state;
         b.finished = true;
-        assertFalse(V9.canMove(state, V9.indexForFileRank(4, 4), V9.indexForFileRank(4, 4)));
+        assertFalse(V9.canPlace(state, V9.indexForFileRank(4, 4)));
         assertFalse(((GoVariant) V9).applyPass(state));
     }
 
@@ -258,9 +258,9 @@ class GoVariantTest {
         GoBoard b = (GoBoard) state;
         b.koSquare = V9.indexForFileRank(0, 0);  // a1
         // a1 不可下 (koSquare guard)
-        assertFalse(V9.canMove(state, V9.indexForFileRank(0, 0), V9.indexForFileRank(0, 0)));
+        assertFalse(V9.canPlace(state, V9.indexForFileRank(0, 0)));
         // a2 不受 koSquare 影响
-        assertTrue(V9.canMove(state, V9.indexForFileRank(0, 1), V9.indexForFileRank(0, 1)));
+        assertTrue(V9.canPlace(state, V9.indexForFileRank(0, 1)));
     }
 
     // ---- Search ----
@@ -289,7 +289,7 @@ class GoVariantTest {
     @DisplayName("pieceAt / sideOfPiece:黑 0,白 1,空 -1")
     void pieceAndSideAccessors() {
         BoardState state = V9.initialState();
-        V9.applyMove(state, V9.indexForFileRank(4, 4), V9.indexForFileRank(4, 4));  // 黑
+        V9.applyPlace(state, V9.indexForFileRank(4, 4));  // 黑
         assertEquals(GoBoard.BLACK, V9.pieceAt(state, V9.indexForFileRank(4, 4)));
         assertEquals(0, V9.sideOfPiece(state, V9.indexForFileRank(4, 4)));
         // 空
@@ -303,15 +303,15 @@ class GoVariantTest {
         BoardState s19 = V19.initialState();
         assertEquals(0, V9.sideToMove(s9));
         assertEquals(0, V19.sideToMove(s19));
-        assertTrue(V9.canMove(s9, V9.indexForFileRank(4, 4), V9.indexForFileRank(4, 4)));
-        assertTrue(V19.canMove(s19, V19.indexForFileRank(9, 9), V19.indexForFileRank(9, 9)));
+        assertTrue(V9.canPlace(s9, V9.indexForFileRank(4, 4)));
+        assertTrue(V19.canPlace(s19, V19.indexForFileRank(9, 9)));
     }
 
     @Test
     @DisplayName("pieceFenChar 返回 x/o/.")
     void pieceFenCharMapping() {
         BoardState state = V9.initialState();
-        V9.applyMove(state, V9.indexForFileRank(4, 4), V9.indexForFileRank(4, 4));
+        V9.applyPlace(state, V9.indexForFileRank(4, 4));
         assertEquals('x', V9.pieceFenChar(state, V9.indexForFileRank(4, 4)));
         assertEquals('.', V9.pieceFenChar(state, V9.indexForFileRank(0, 0)));
     }
@@ -356,8 +356,8 @@ class GoVariantTest {
     @DisplayName("scoreDelta:黑 1 子 vs 白 1 子,komi 让白得 7.5 → delta = -7.5")
     void scoreDeltaBasic() {
         BoardState state = V9.initialState();
-        V9.applyMove(state, V9.indexForFileRank(4, 4), V9.indexForFileRank(4, 4));
-        V9.applyMove(state, V9.indexForFileRank(4, 5), V9.indexForFileRank(4, 5));
+        V9.applyPlace(state, V9.indexForFileRank(4, 4));
+        V9.applyPlace(state, V9.indexForFileRank(4, 5));
         // 黑子 1,白子 1,territory 0,黑分 1 - 白分 (1 + 7.5) = -7.5
         double delta = ((GoVariant) V9).scoreDelta((GoBoard) state);
         assertEquals(-7.5, delta, 0.0001);

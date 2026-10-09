@@ -115,6 +115,12 @@ public final class GameLogic {
         if (state == GameState.FINISHED) return MoveOutcome.GAME_FINISHED;
         if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
 
+        BoardVariant v = session.getVariant();
+        // Placement variants (gomoku + go) have no "src → dst" semantics.
+        // Reject explicitly so the wire ACTION_MOVE is clearly refused
+        // before any canMove default-false or SOURCE_MISMATCH shenanigans.
+        if (v.isPlacement()) return MoveOutcome.ILLEGAL_MOVE;
+
         int role = session.getPlayerRole(playerId);
         if (role != session.getSdPlayer()) return MoveOutcome.NOT_YOUR_TURN;
 
@@ -179,6 +185,10 @@ public final class GameLogic {
      *
      * <p>There is deliberately no {@code SOURCE_MISMATCH} check: the engine has
      * no selection state to match against.
+     *
+     * <p>Placement variants (gomoku + go) have no "src → dst" semantics — they
+     * are placement-only — so this returns {@link MoveOutcome#ILLEGAL_MOVE}
+     * for them. Use {@link #tryEnginePlace} / {@link #tryEnginePass} instead.
      */
     public static MoveOutcome tryEngineMove(GameSession session, int src, int dst) {
         if (session == null) return MoveOutcome.NOT_IN_GAME;
@@ -186,6 +196,7 @@ public final class GameLogic {
         if (state == GameState.FINISHED) return MoveOutcome.GAME_FINISHED;
         if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
         if (!session.isComputerToMove()) return MoveOutcome.NOT_YOUR_TURN;
+        if (session.getVariant().isPlacement()) return MoveOutcome.ILLEGAL_MOVE;
         return applyMove(session, src, dst);
     }
 
@@ -219,9 +230,38 @@ public final class GameLogic {
     }
 
     /**
+     * Execute a pass action on behalf of whichever side is to move, with no
+     * seat check. Mirror of {@link #tryEngineMove} for the pass concept:
+     * only variants that override {@link BoardVariant#canPass} /
+     * {@link BoardVariant#applyPass} (currently {@code go9} / {@code go19})
+     * can return {@link MoveOutcome#OK} here; everything else returns
+     * {@link MoveOutcome#ILLEGAL_MOVE}.
+     */
+    public static MoveOutcome tryEnginePass(GameSession session) {
+        if (session == null) return MoveOutcome.NOT_IN_GAME;
+        GameState state = session.getState();
+        if (state == GameState.FINISHED) return MoveOutcome.GAME_FINISHED;
+        if (state != GameState.PLAYING) return MoveOutcome.GAME_NOT_PLAYING;
+        if (!session.isComputerToMove()) return MoveOutcome.NOT_YOUR_TURN;
+        BoardVariant v = session.getVariant();
+        BoardState bs = session.getBoardState();
+        if (!v.canPass(bs)) return MoveOutcome.ILLEGAL_MOVE;
+        if (!v.applyPass(bs)) return MoveOutcome.ILLEGAL_MOVE;
+        session.setSdPlayer(1 - session.getSdPlayer());
+        session.setSelectPoint(-1);
+        GameResult result = session.checkGameOver();
+        if (result != GameResult.ONGOING) {
+            session.setResult(result);
+            session.setState(GameState.FINISHED);
+        }
+        return MoveOutcome.OK;
+    }
+
+    /**
      * Pass action — currently only meaningful for {@code go9} / {@code go19}.
-     * Re-uses {@code Move(-1, -1)} as the sentinel; {@code BoardVariant.applyMove}
-     * routes that to {@code applyPass} for Go and rejects it elsewhere.
+     * Routes through the variant's {@link BoardVariant#canPass} /
+     * {@link BoardVariant#applyPass} — pass is its own concept, not a
+     * "move with sentinel src = dst = -1".
      */
     public static MoveOutcome tryPass(GameSession session, UUID playerId) {
         if (session == null) return MoveOutcome.NOT_IN_GAME;
@@ -233,14 +273,15 @@ public final class GameLogic {
         if (role != session.getSdPlayer()) return MoveOutcome.NOT_YOUR_TURN;
         BoardVariant v = session.getVariant();
         BoardState bs = session.getBoardState();
-        // Variants that don't support pass just return ILLEGAL_MOVE. The Go
-        // variants flip sdPlayer via applyPass and check for 2-pass end inside
-        // their own applyMove implementation.
-        if (!v.canMove(bs, -1, -1)) return MoveOutcome.ILLEGAL_MOVE;
-        if (!v.applyMove(bs, -1, -1)) return MoveOutcome.ILLEGAL_MOVE;
+        if (!v.canPass(bs)) return MoveOutcome.ILLEGAL_MOVE;
+        if (!v.applyPass(bs)) return MoveOutcome.ILLEGAL_MOVE;
         session.setSdPlayer(1 - session.getSdPlayer());
         session.setSelectPoint(-1);
-        session.checkGameOver();
+        GameResult result = session.checkGameOver();
+        if (result != GameResult.ONGOING) {
+            session.setResult(result);
+            session.setState(GameState.FINISHED);
+        }
         return MoveOutcome.OK;
     }
 

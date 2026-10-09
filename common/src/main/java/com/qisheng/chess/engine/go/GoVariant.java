@@ -228,50 +228,14 @@ public final class GoVariant implements BoardVariant {
         return true;
     }
 
-    @Override public boolean canMove(BoardState state, int src, int dst) {
-        if (!(state instanceof GoBoard b)) return false;
-        // Pass sentinel: src == dst == -1.
-        if (src == -1 && dst == -1) return !b.finished;
-        if (src != dst) return false;          // Go: place-only, src == dst
-        if (!isValidSquare(dst)) return false;
-        if (b.finished) return false;
-        if (b.squares[dst] != GoBoard.EMPTY) return false;
-        if (dst == b.koSquare) return false;    // simple ko guard
-        return placementLeavesLiberty(b, dst);
-    }
+    // NOTE: Go is placement-only. There is no canMove / applyMove here — the
+    // interface default returns false, and GameLogic.tryMove rejects the
+    // action explicitly with ILLEGAL_MOVE before reaching the variant.
+    // Pass is its own action (canPass / applyPass), not a sentinel move.
 
-    @Override public boolean applyMove(BoardState state, int src, int dst) {
+    @Override public boolean canPass(BoardState state) {
         if (!(state instanceof GoBoard b)) return false;
-        // Pass: route to applyPass so the 2-pass end-game rule fires.
-        if (src == -1 && dst == -1) return applyPass(state);
-        if (!canMove(b, src, dst)) return false;
-        byte stone = (byte) (b.sdPlayer == 0 ? GoBoard.BLACK : GoBoard.WHITE);
-        byte oppStone = (byte) (b.sdPlayer == 0 ? GoBoard.WHITE : GoBoard.BLACK);
-        b.squares[dst] = stone;
-        int capturedCount = 0;
-        int singleCaptureSq = -1;
-        // Capture opponent groups adjacent to dst with no liberties.
-        int[] adj = adjacent(b, dst);
-        for (int a : adj) {
-            if (b.squares[a] != oppStone) continue;
-            if (groupHasLiberty(b, a)) continue;
-            int removed = removeGroup(b, a);
-            capturedCount += removed;
-            singleCaptureSq = a;
-        }
-        if (b.sdPlayer == 0) b.blackCaptures += capturedCount;
-        else                  b.whiteCaptures += capturedCount;
-        // Ko rule: a move that captures exactly one stone, leaving that
-        // square empty and only the placed stone on its own, sets koSquare
-        // to the captured square — the standard simple-ko shape.
-        if (capturedCount == 1 && groupHasOnlyOneStone(b, dst)) {
-            b.koSquare = singleCaptureSq;
-        } else {
-            b.koSquare = -1;
-        }
-        b.passes = 0;
-        b.sdPlayer = 1 - b.sdPlayer;
-        return true;
+        return !b.finished;
     }
 
     @Override public String toFen(BoardState state) {
@@ -332,15 +296,16 @@ public final class GoVariant implements BoardVariant {
     }
 
     /**
-     * "Pass" is exposed as a move with {@code src = dst = -1}. The wire /
-     * GUI paths route to {@link #applyPass}, but the search API takes a
-     * Move — {@code Move.NONE} is reserved for "no move", so we use
-     * {@code Move(-1, -1)} as the sentinel for pass.
+     * "Pass" — skip the side-to-move's turn. Reached from
+     * {@code GameLogic.tryPass} (human) and {@code tryEnginePass} (AI) via
+     * the interface methods. Two consecutive passes end the game.
      *
-     * <p>v0.4 ships no GUI for passing — passing in a GUI-only game is
-     * unusual, and the AI doesn't pass on its own yet. We still implement
-     * it so the variant is rules-correct for future milestones.
+     * <p>Pass is independent of {@link #canPlace} / {@link #applyPlace}:
+     * a pass is "I skip", a place is "I put a stone on sq". They are
+     * separate wire actions ({@code ACTION_PASS} and {@code ACTION_PLACE})
+     * and separate variant methods ({@link #canPass} / {@link #applyPass}).
      */
+    @Override
     public boolean applyPass(BoardState state) {
         if (!(state instanceof GoBoard b)) return false;
         if (b.finished) return false;
@@ -364,7 +329,7 @@ public final class GoVariant implements BoardVariant {
         for (int r = 0; r < b.size; r++) {
             for (int f = 0; f < b.size; f++) {
                 int sq = b.sq(f, r);
-                if (!canMove(b, sq, sq)) continue;
+                if (!canPlace(b, sq)) continue;
                 int p = placementPriority(b, sq, me);
                 if (p > bestPriority) {
                     bestPriority = p;
@@ -486,7 +451,7 @@ public final class GoVariant implements BoardVariant {
         for (int r = size - 1; r >= 0; r--) {
             for (int f = 0; f < size; f++) {
                 int sq = b.sq(f, r);
-                if (canMove(b, sq, sq)) return new Move(sq, sq);
+                if (canPlace(b, sq)) return new Move(sq, sq);
             }
         }
         return Move.NONE;

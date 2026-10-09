@@ -61,25 +61,41 @@ class GomokuVariantTest {
         BoardState state = V.initialState();
         int h8 = V.indexForFileRank(7, 7);
         // 黑下 h8
-        assertTrue(V.canMove(state, h8, h8));
-        assertTrue(V.applyMove(state, h8, h8));
+        assertTrue(V.canPlace(state, h8));
+        assertTrue(V.applyPlace(state, h8));
         assertEquals(1, V.sideToMove(state));
         // 已下不可再下
-        assertFalse(V.canMove(state, h8, h8));
+        assertFalse(V.canPlace(state, h8));
         // 白下方 a1
         int a1 = V.indexForFileRank(0, 0);
-        assertTrue(V.canMove(state, a1, a1));
-        assertTrue(V.applyMove(state, a1, a1));
+        assertTrue(V.canPlace(state, a1));
+        assertTrue(V.applyPlace(state, a1));
         assertEquals(0, V.sideToMove(state));
     }
 
     @Test
-    @DisplayName("canMove 拒绝 src != dst(五子棋只能落子)")
-    void canMoveRejectsSrcNeqDst() {
+    @DisplayName("canMove 总是 false(placement 变种不实现 canMove/applyMove)")
+    void canMoveAlwaysFalseForPlacementVariant() {
+        // v0.4.15: placement variants (gomoku, go) no longer override
+        // canMove / applyMove at all. The interface default returns false.
+        // This test was "canMove rejects src != dst"; after the refactor,
+        // canMove always returns false regardless of src/dst, so the same
+        // assertion still holds — but the semantic is "this variant has no
+        // move path" rather than "this variant rejects cross-board moves".
+        // canPlace / applyPlace on an empty square on an empty board are the
+        // opposite: they succeed, because empty is the natural placement
+        // target. So we cover the canMove branch explicitly below.
         BoardState state = V.initialState();
         int h8 = V.indexForFileRank(7, 7);
         int a1 = V.indexForFileRank(0, 0);
+        // canMove — placement variant has no move concept at all.
         assertFalse(V.canMove(state, h8, a1));
+        assertFalse(V.canMove(state, h8, h8));
+        // canPlace / applyPlace on an empty board at h8: should succeed.
+        assertTrue(V.canPlace(state, h8));
+        assertTrue(V.applyPlace(state, h8));
+        // After placing, the same square is occupied — canPlace rejects.
+        assertFalse(V.canPlace(state, h8));
     }
 
     @Test
@@ -91,19 +107,19 @@ class GomokuVariantTest {
         int[] white = {sq(0, 0), sq(1, 0), sq(2, 0), sq(3, 0), sq(0, 1)};
         for (int i = 0; i < 4; i++) {
             // 黑落
-            assertTrue(V.applyMove(state, black[i], black[i]));
+            assertTrue(V.applyPlace(state, black[i]));
             // 白落
-            assertTrue(V.applyMove(state, white[i], white[i]));
+            assertTrue(V.applyPlace(state, white[i]));
         }
         // 黑第 5 颗
-        assertTrue(V.applyMove(state, black[4], black[4]));
+        assertTrue(V.applyPlace(state, black[4]));
         // 此时胜局已立
         assertTrue(V.isCheckmate(state));
         // winner 字段:detectWinner 应返回 BLACK
         GomokuBoard b = (GomokuBoard) state;
         assertEquals(GomokuBoard.BLACK, b.winner);
         // 黑方后续不能再下
-        assertFalse(V.canMove(state, sq(0, 14), sq(0, 14)));
+        assertFalse(V.canPlace(state, sq(0, 14)));
     }
 
     @Test
@@ -114,13 +130,13 @@ class GomokuVariantTest {
         int[] black = {sq(1, 5), sq(2, 5), sq(3, 5), sq(4, 5)};
         int[] white = {sq(0, 0), sq(0, 1), sq(0, 2), sq(0, 3), sq(0, 4)};
         for (int i = 0; i < 4; i++) {
-            assertTrue(V.applyMove(state, black[i], black[i]));
-            assertTrue(V.applyMove(state, white[i], white[i]));
+            assertTrue(V.applyPlace(state, black[i]));
+            assertTrue(V.applyPlace(state, white[i]));
         }
         // 黑补一手 (6,6) → sdPlayer=1 (白),但不构成五连
-        assertTrue(V.applyMove(state, sq(6, 6), sq(6, 6)));
+        assertTrue(V.applyPlace(state, sq(6, 6)));
         // 白下 (0,4) 完成 5 连
-        assertTrue(V.applyMove(state, sq(0, 4), sq(0, 4)));
+        assertTrue(V.applyPlace(state, sq(0, 4)));
         GomokuBoard b = (GomokuBoard) state;
         assertEquals(GomokuBoard.WHITE, b.winner);
         assertTrue(V.isCheckmate(state));
@@ -133,11 +149,11 @@ class GomokuVariantTest {
         int[] black = {sq(0, 0), sq(1, 1), sq(2, 2), sq(3, 3), sq(4, 4)};
         int[] white = {sq(8, 0), sq(8, 1), sq(8, 2), sq(8, 3)};
         for (int i = 0; i < 4; i++) {
-            assertTrue(V.applyMove(state, black[i], black[i]));
-            assertTrue(V.applyMove(state, white[i], white[i]));
+            assertTrue(V.applyPlace(state, black[i]));
+            assertTrue(V.applyPlace(state, white[i]));
         }
         // 循环 8 步:sdPlayer=0(黑),黑先
-        assertTrue(V.applyMove(state, black[4], black[4]));
+        assertTrue(V.applyPlace(state, black[4]));
         GomokuBoard b = (GomokuBoard) state;
         assertEquals(GomokuBoard.BLACK, b.winner);
     }
@@ -200,7 +216,7 @@ class GomokuVariantTest {
     void pieceAndSideAccessors() {
         BoardState state = V.initialState();
         int h8 = V.indexForFileRank(7, 7);
-        V.applyMove(state, h8, h8);
+        V.applyPlace(state, h8);
         // 黑刚落,黑子
         assertEquals(GomokuBoard.BLACK, V.pieceAt(state, h8));
         assertEquals(0, V.sideOfPiece(state, h8));
@@ -233,7 +249,7 @@ class GomokuVariantTest {
             int f = i % 15;
             int r = i / 15;
             int s = V.indexForFileRank(f, r);
-            assertTrue(V.applyMove(state, s, s));
+            assertTrue(V.applyPlace(state, s));
         }
         // 14 = 偶数 → 翻 14 次 → sdPlayer = 0 (黑)
         assertEquals(0, V.sideToMove(state));
@@ -246,10 +262,10 @@ class GomokuVariantTest {
         int[] black = {sq(7, 7), sq(7, 8), sq(7, 9), sq(7, 10), sq(7, 11)};
         int[] white = {sq(0, 0), sq(1, 0), sq(2, 0), sq(3, 0), sq(0, 1)};
         for (int i = 0; i < 4; i++) {
-            V.applyMove(state, black[i], black[i]);
-            V.applyMove(state, white[i], white[i]);
+            V.applyPlace(state, black[i]);
+            V.applyPlace(state, white[i]);
         }
-        V.applyMove(state, black[4], black[4]);
+        V.applyPlace(state, black[4]);
         assertEquals('x', V.pieceFenChar(state, sq(7, 7)));
         assertEquals('x', V.pieceFenChar(state, sq(7, 11)));
         assertEquals('o', V.pieceFenChar(state, sq(0, 0)));
@@ -259,8 +275,8 @@ class GomokuVariantTest {
     @DisplayName("toFen 后能再次 parseState 还原")
     void fenRoundTripAfterMove() {
         BoardState state = V.initialState();
-        V.applyMove(state, V.indexForFileRank(3, 4), V.indexForFileRank(3, 4));
-        V.applyMove(state, V.indexForFileRank(7, 7), V.indexForFileRank(7, 7));
+        V.applyPlace(state, V.indexForFileRank(3, 4));
+        V.applyPlace(state, V.indexForFileRank(7, 7));
         String fen = V.toFen(state);
         BoardState back = V.parseState(fen);
         assertNotNull(back);

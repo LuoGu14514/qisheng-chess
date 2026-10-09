@@ -36,7 +36,8 @@ class GameSessionWinnerTest {
         GomokuBoard b = (GomokuBoard) variant.initialState();
         for (int[] fr : fileRanks) {
             int idx = variant.indexForFileRank(fr[0], fr[1]);
-            variant.applyMove(b, idx, idx);  // single-click placement
+            // v0.4.15: Gomoku is placement-only — use applyPlace, not applyMove.
+            variant.applyPlace(b, idx);
         }
         return b;
     }
@@ -89,8 +90,9 @@ class GameSessionWinnerTest {
     void goTwoPassesEndsGame() {
         GoVariant v9 = (GoVariant) BoardRegistry.getById("go9");
         GoBoard b = (GoBoard) v9.initialState();
-        v9.applyMove(b, -1, -1);  // black pass
-        v9.applyMove(b, -1, -1);  // white pass
+        // v0.4.15: Pass is its own action — use applyPass, not applyMove(-1,-1).
+        v9.applyPass(b);  // black pass
+        v9.applyPass(b);  // white pass
         assertTrue(b.finished);
 
         GameSession session = new GameSession();

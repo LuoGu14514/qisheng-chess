@@ -93,27 +93,39 @@ public interface BoardVariant {
     int sideOfPiece(BoardState state, int sq);
 
     /**
-     * True when moving {@code src → dst} is legal for the side to move, and
-     * would not leave the mover's own king in check.
-     */
-    boolean canMove(BoardState state, int src, int dst);
-
-    /**
      * True when this variant accepts a single-click placement action instead
      * of a select→move flow (gomoku, go). Default is {@code false}; placement
      * variants override this so the server can route clicks through
      * {@link #canPlace} / {@link #applyPlace} and the client can send
      * {@code ACTION_PLACE} instead of {@code ACTION_MOVE}.
+     *
+     * <p><b>Placement variants do not implement {@link #canMove} or
+     * {@link #applyMove} at all.</b> A click on a placement board is a
+     * "place a stone" action; there is no notion of "select piece, then move
+     * it to another square". The interface default of {@code canMove} /
+     * {@code applyMove} returns {@code false}, so any call routed to those
+     * methods on a placement variant is automatically rejected. The explicit
+     * check at the top of {@code GameLogic.tryMove} short-circuits earlier
+     * with a clearer error.
      */
     default boolean isPlacement() { return false; }
+
+    /**
+     * True when moving {@code src → dst} is legal for the side to move, and
+     * would not leave the mover's own king in check. Default {@code false};
+     * placement variants do not override this — placement has no
+     * "src → dst" semantics, only {@link #canPlace}.
+     */
+    default boolean canMove(BoardState state, int src, int dst) { return false; }
 
     /**
      * Make {@code src → dst} on {@code state} (mutating it). Returns
      * {@code true} on success, {@code false} when the move is illegal /
      *   off-board / exposes the mover's king (in which case {@code state} is
-     *   left exactly as it was).
+     *   left exactly as it was). Default {@code false}; placement variants
+     *   do not override this — there is no "move" path for them.
      */
-    boolean applyMove(BoardState state, int src, int dst);
+    default boolean applyMove(BoardState state, int src, int dst) { return false; }
 
     /**
      * True when dropping a stone at {@code sq} is legal for the side to
@@ -131,6 +143,21 @@ public interface BoardVariant {
      * variants override.
      */
     default boolean applyPlace(BoardState state, int sq) { return false; }
+
+    /**
+     * True when the side to move may pass this turn. Defaults to
+     * {@code false}; only Go overrides (two consecutive passes end the game).
+     * Independent of {@link #canMove} / {@link #applyMove} — pass is its own
+     * action, not a "move with sentinel src = dst = -1".
+     */
+    default boolean canPass(BoardState state) { return false; }
+
+    /**
+     * Skip this turn (no stone placed). Returns {@code true} on success,
+     * {@code false} when the variant does not support pass or the game has
+     * already ended. Defaults to {@code false}; Go overrides.
+     */
+    default boolean applyPass(BoardState state) { return false; }
 
     /** The variant's FEN string for the current position. */
     String toFen(BoardState state);

@@ -127,6 +127,10 @@ public final class GomokuVariant implements BoardVariant {
         return true;
     }
 
+    // NOTE: Gomoku is placement-only. There is no canMove / applyMove here —
+    // the interface default returns false, and GameLogic.tryMove rejects the
+    // action explicitly with ILLEGAL_MOVE before reaching the variant.
+
     @Override public int indexForFileRank(int file, int rank) {
         return GomokuBoard.sq(file, rank);
     }
@@ -151,26 +155,6 @@ public final class GomokuVariant implements BoardVariant {
         if (pc == GomokuBoard.BLACK) return 0;
         if (pc == GomokuBoard.WHITE) return 1;
         return -1;
-    }
-
-    @Override public boolean canMove(BoardState state, int src, int dst) {
-        if (!(state instanceof GomokuBoard b)) return false;
-        // Gomoku is place-only: src must equal dst (just naming the square).
-        if (src != dst) return false;
-        if (!isValidSquare(dst)) return false;
-        if (b.squares[dst] != GomokuBoard.EMPTY) return false;
-        if (b.winner != GomokuBoard.EMPTY) return false;
-        return true;
-    }
-
-    @Override public boolean applyMove(BoardState state, int src, int dst) {
-        if (!(state instanceof GomokuBoard b)) return false;
-        if (!canMove(b, src, dst)) return false;
-        b.squares[dst] = (byte) (b.sdPlayer == 0 ? GomokuBoard.BLACK : GomokuBoard.WHITE);
-        b.moveCount++;
-        b.winner = detectWinner(b);
-        b.sdPlayer = 1 - b.sdPlayer;
-        return true;
     }
 
     @Override public String toFen(BoardState state) {

@@ -131,17 +131,132 @@ public class PlacementMoveTest {
 
     @Test
     public void placementVariantRejectsActionMoveForHuman() {
-        // After v0.4.14 the human path for placement is tryPlace, not tryMove.
+        // After v0.4.15 the human path for placement is tryPlace, not tryMove.
         // A human who accidentally sends ACTION_MOVE for a placement variant
-        // gets SOURCE_MISMATCH (no selectPoint to match) — the client will
-        // never do this, but a malicious client shouldn't be able to abuse the
-        // isPlacementOnly() bypass that v0.4.13 added.
+        // gets ILLEGAL_MOVE explicitly from tryMove's placement-variant
+        // guard. The variant no longer overrides canMove/applyMove at all —
+        // the interface default returns false, and the explicit guard
+        // short-circuits earlier with a clearer error.
         BoardVariant gomoku = BoardRegistry.getByIdOrDefault("gomoku");
         GameSession s = newPlayingPvC(gomoku);
         s.setSdPlayer(0);
         int sq = gomoku.indexForFileRank(7, 7);
         GameLogic.MoveOutcome out = GameLogic.tryMove(s, RED, sq, sq);
-        assertEquals(GameLogic.MoveOutcome.SOURCE_MISMATCH, out);
+        assertEquals(GameLogic.MoveOutcome.ILLEGAL_MOVE, out);
+    }
+
+    @Test
+    public void placementVariantTryEngineMoveRejects() {
+        // Mirror of placementVariantRejectsActionMoveForHuman for the AI
+        // path: tryEngineMove refuses placement variants even though
+        // isComputerToMove() would otherwise pass. We set the seat up so
+        // isComputerToMove() would return true (RED=human, BLACK=null,
+        // sdPlayer=1 → side 1 is the computer) — the test is that the
+        // isPlacement() guard fires *before* the seat gate, returning
+        // ILLEGAL_MOVE rather than OK or NOT_YOUR_TURN.
+        BoardVariant gomoku = BoardRegistry.getByIdOrDefault("gomoku");
+        GameSession s = new GameSession();
+        s.setVariantId(gomoku.id());
+        s.setMode(BoardMode.PVC);
+        s.setState(GameState.PLAYING);
+        s.setRedPlayer(RED);
+        // BLACK left null on purpose.
+        s.setSdPlayer(1);
+        gomoku.setSideToMove(s.getBoardState(), 1);
+
+        int sq = gomoku.indexForFileRank(7, 7);
+        GameLogic.MoveOutcome out = GameLogic.tryEngineMove(s, sq, sq);
+        assertEquals(GameLogic.MoveOutcome.ILLEGAL_MOVE, out);
+    }
+
+    @Test
+    public void placementVariantHasNoCanMove() {
+        // The BoardVariant interface default for canMove returns false. A
+        // placement variant (gomoku) does not override it — so any caller
+        // that reaches the variant's canMove gets false. This is the
+        // defence-in-depth that ensures a future routing bug cannot slip a
+        // move through to a placement board.
+        BoardVariant gomoku = BoardRegistry.getByIdOrDefault("gomoku");
+        GameSession s = newPlayingPvC(gomoku);
+        s.setSdPlayer(0);
+        int sq = gomoku.indexForFileRank(7, 7);
+        assertEquals(false, gomoku.canMove(s.getBoardState(), sq, sq));
+        assertEquals(false, gomoku.applyMove(s.getBoardState(), sq, sq));
+    }
+
+    @Test
+    public void goHumanPassFlipsSdPlayer() {
+        // Go's pass is its own action (canPass/applyPass), not a move with
+        // a sentinel. A human's "pass" wire should go through tryPass and
+        // flip the side to move.
+        BoardVariant go = BoardRegistry.getByIdOrDefault("go19");
+        GameSession s = newPlayingPvC(go);
+        s.setSdPlayer(0);
+        assertEquals(0, s.getSdPlayer());
+
+        GameLogic.MoveOutcome out = GameLogic.tryPass(s, RED);
+        assertEquals(GameLogic.MoveOutcome.OK, out);
+        assertEquals(1, s.getSdPlayer());
+
+        // The board's pass counter is internal to GoBoard.passes — verify
+        // it's now 1.
+        GoBoard board = (GoBoard) s.getBoardState();
+        assertEquals(1, board.passes);
+    }
+
+    @Test
+    public void goTwoConsecutivePassesEndGame() {
+        // Pass-pass ends the game (the 2-pass rule inside GoVariant.applyPass).
+        BoardVariant go = BoardRegistry.getByIdOrDefault("go19");
+        GameSession s = newPlayingPvC(go);
+        s.setSdPlayer(0);
+
+        GameLogic.MoveOutcome first  = GameLogic.tryPass(s, RED);
+        GameLogic.MoveOutcome second = GameLogic.tryPass(s, BLACK);
+        assertEquals(GameLogic.MoveOutcome.OK, first);
+        assertEquals(GameLogic.MoveOutcome.OK, second);
+
+        // After the second pass, the game is over — sdPlayer has flipped back
+        // to 0 inside applyPass before checkGameOver fired, and
+        // checkGameOver should have transitioned the session to FINISHED.
+        assertEquals(GameState.FINISHED, s.getState());
+    }
+
+    @Test
+    public void gomokuHumanPassRejected() {
+        // Gomoku has no pass — canPass defaults to false. The human's
+        // tryPass returns ILLEGAL_MOVE without touching the board.
+        BoardVariant gomoku = BoardRegistry.getByIdOrDefault("gomoku");
+        GameSession s = newPlayingPvC(gomoku);
+        s.setSdPlayer(0);
+        int before = s.getSdPlayer();
+
+        GameLogic.MoveOutcome out = GameLogic.tryPass(s, RED);
+        assertEquals(GameLogic.MoveOutcome.ILLEGAL_MOVE, out);
+        assertEquals(before, s.getSdPlayer());
+    }
+
+    @Test
+    public void goEnginePassFlipsSdPlayer() {
+        // tryEnginePass mirrors tryPass for the AI: same canPass/applyPass
+        // path, no seat check. In Go, black plays first (sdPlayer=0); the
+        // session models that as "side 0 is the computer" (redPlayer null,
+        // blackPlayer a human), which is the mirror image of the gomoku
+        // tryEnginePlace test where the computer sits on side 1.
+        BoardVariant go = BoardRegistry.getByIdOrDefault("go19");
+        GameSession s = new GameSession();
+        s.setVariantId(go.id());
+        s.setMode(BoardMode.PVC);
+        s.setState(GameState.PLAYING);
+        // Side 0 (redPlayer) left null — the computer plays Go's first move
+        // (black in Go terms = side 0 in session terms).
+        s.setBlackPlayer(BLACK);
+        s.setSdPlayer(0);
+        go.setSideToMove(s.getBoardState(), 0);
+
+        GameLogic.MoveOutcome out = GameLogic.tryEnginePass(s);
+        assertEquals(GameLogic.MoveOutcome.OK, out);
+        assertEquals(1, s.getSdPlayer());
     }
 
     @Test

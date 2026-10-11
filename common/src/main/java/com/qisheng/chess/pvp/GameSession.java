@@ -234,21 +234,33 @@ public class GameSession {
         if (v.isCheckmate(state)) {
             // Gomoku and Go encode the winner on the board itself; the
             // sdPlayer-flip trick that works for Xiangqi (where the mated
-            // side has no legal moves) does NOT work here — after Black wins
-            // a Gomoku game, sdPlayer has flipped to 1 (White's turn), and the
-            // naive sdPlayer-flip below would declare Red the victor.
+            // side has no legal moves) does NOT work here — after a winning
+            // move the board has already flipped sdPlayer to the LOSING
+            // side's turn. We must map the board's stone colour / score
+            // delta back to a session seat.
+            //
+            // Seat convention (matches SessionManager.joinGame + xiangqi):
+            //   sdPlayer=0  →  RED seat   (first joiner, plays first)
+            //   sdPlayer=1  →  BLACK seat  (second joiner, plays second)
+            //
+            // Gomoku stone layout:
+            //   GomokuBoard.BLACK (byte 1) sits on the session's RED seat
+            //     (Gomoku black plays first, and the first joiner is RED).
+            //   GomokuBoard.WHITE (byte 2) sits on the session's BLACK seat.
             if (v instanceof GomokuVariant && state instanceof GomokuBoard g) {
-                if (g.winner == GomokuBoard.BLACK) return GameResult.BLACK_WIN;
-                if (g.winner == GomokuBoard.WHITE) return GameResult.RED_WIN;
+                if (g.winner == GomokuBoard.BLACK) return GameResult.RED_WIN;
+                if (g.winner == GomokuBoard.WHITE) return GameResult.BLACK_WIN;
             }
             if (v instanceof GoVariant && state instanceof GoBoard gb) {
-                // Chinese area scoring: blackScore - whiteScore (white gets
-                // KOMI as a base offset inside scoreDelta). A draw under the
-                // current Go rules is impossible; tie → black wins by seat.
+                // scoreDelta = blackScore - whiteScore with white getting
+                // KOMI as a base offset inside scoreDelta. Tie is impossible
+                // under the current Go rules (KOMI is non-zero, no superko),
+                // but guard against it anyway by handing it to RED (the seat
+                // that plays first in Go = Go BLACK = session's RED).
                 double delta = ((GoVariant) v).scoreDelta(gb);
-                if (delta > 0) return GameResult.BLACK_WIN;
-                if (delta < 0) return GameResult.RED_WIN;
-                return GameResult.BLACK_WIN;
+                if (delta > 0) return GameResult.RED_WIN;
+                if (delta < 0) return GameResult.BLACK_WIN;
+                return GameResult.RED_WIN;
             }
             // Xiangqi (and any future chess-like variant where the losing
             // side is sdPlayer because the loser has no legal moves).

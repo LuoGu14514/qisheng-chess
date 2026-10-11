@@ -1565,17 +1565,20 @@ public class CChessBoardScreen extends Screen {
         byte pc = (bs != null) ? v.pieceAt(bs, sq) : 0;
 
         // Placement variants (gomoku + go): two-click placement — first
-        // click shows a preview ring, second click on the same square
-        // confirms and sends ACTION_PLACE. Clicking a different empty
-        // square moves the preview; clicking an occupied square clears
-        // it. The wire action is still ACTION_PLACE (1 square arg) so
-        // the server's placement logic doesn't share code with the
-        // xiangqi/chess move flow. Passes go through ACTION_PASS (the
-        // button below the board).
+        // click on an empty square shows the preview ring, second click
+        // on the same square confirms and sends ACTION_PLACE. Clicking
+        // a different empty square moves the preview to the new spot.
+        // Occupied squares are ignored (no cancel behavior — the
+        // preview is only cleared on confirm or server sync). The wire
+        // action is still ACTION_PLACE (1 square arg) so the server's
+        // placement logic doesn't share code with the xiangqi/chess
+        // move flow. Passes go through ACTION_PASS (the button below
+        // the board).
         if (isPlacementVariant()) {
             if (pc != 0) {
-                // Occupied square — the preview is no longer valid here.
-                previewSquare = -1;
+                // Occupied square — do nothing; the preview stays where
+                // it was and the player can click an empty square to
+                // move it, or click the same square again to confirm.
                 return;
             }
             if (previewSquare == sq) {
@@ -1583,9 +1586,9 @@ public class CChessBoardScreen extends Screen {
                 sendInteract(ACTION_PLACE, sq, 0);
                 previewSquare = -1;
             } else {
-                // First click (or moved from a different square): show
-                // the preview here. Don't send anything until the player
-                // confirms with a second click.
+                // First click, or moved from a different empty square:
+                // show the preview here. Don't send anything until the
+                // player confirms with a second click.
                 previewSquare = sq;
             }
             return;

@@ -103,6 +103,12 @@ public class CChessBoardScreen extends Screen {
     private static final int COL_RED_TEXT      = 0xFFFFF8DC;
     private static final int COL_BLACK_TEXT    = 0xFFFFD700;
     private static final int COL_SEL_BORDER    = 0xFFFFFF00;
+    /**
+     * Two-click placement preview (gomoku/go): hollow ring on the cell the
+     * next stone would land on. Drawn after the stones so it always sits on
+     * top, but inside the cell disc so it doesn't bleed into the grid.
+     */
+    private static final int COL_PREVIEW_RING = 0xCC1E90FF;
     private static final int COL_LEGAL_DOT     = 0xCC4A8FD0;
     private static final int COL_CAPTURE_RING  = 0xCCFF5A4A;
     private static final int COL_TEXT_PRIMARY  = 0xFFFFFFFF;
@@ -135,6 +141,15 @@ public class CChessBoardScreen extends Screen {
     private int sdPlayer = 0;
     private int stateOrd = 1;
     private int selectedSq = -1;
+    /**
+     * Placement-only preview square for gomoku/go: first click on an empty
+     * square sets this to show where the next stone would land; second click
+     * on the same square confirms and sends {@code ACTION_PLACE}. Clicking
+     * elsewhere moves the preview; clicking an occupied square clears it.
+     * Cleared on every {@code applySync} so the preview cannot linger past
+     * the board state it was generated for. {@code -1} = no preview.
+     */
+    private int previewSquare = -1;
     /**
      * Last successful move src & destination (or {@code -1} if no move has been
      * played yet). Updated on every {@code applySync}; the renderer uses
@@ -311,6 +326,12 @@ public class CChessBoardScreen extends Screen {
         this.sdPlayer = sdPlayer;
         this.stateOrd = stateOrd;
         this.selectedSq = selectPoint;
+        // The preview ring is generated against the FEN the player just
+        // saw. Any server sync (own placement, opponent placement, game
+        // end, role change) means the preview is stale — clear it. The
+        // local click handler resets it before sending ACTION_PLACE so
+        // there's no race against the inbound applySync.
+        this.previewSquare = -1;
         int prevSrc = this.lastMoveSrc;
         int prevDst = this.lastMoveDst;
         this.lastMoveSrc = variant().isValidSquare(lastMoveSrc) ? lastMoveSrc : -1;
@@ -973,6 +994,9 @@ public class CChessBoardScreen extends Screen {
                 drawStone(gfx, viewCX(file), viewCY(rank), discR, isBlack);
             }
         }
+        // Two-click preview ring sits on top of the stones so the player
+        // always sees where the next stone would land.
+        drawPlacementPreview(gfx);
     }
 
     /**
@@ -1016,6 +1040,9 @@ public class CChessBoardScreen extends Screen {
                 drawStone(gfx, viewCX(file), viewCY(rank), discR, isBlack);
             }
         }
+        // Two-click preview ring sits on top of the stones so the player
+        // always sees where the next stone would land.
+        drawPlacementPreview(gfx);
     }
 
     /**
@@ -1047,6 +1074,43 @@ public class CChessBoardScreen extends Screen {
     private void drawPlacementLastMoveOverlay(GuiGraphics gfx) {
         drawPlacementLastMoveSquare(gfx, lastMoveSrc);
         drawPlacementLastMoveSquare(gfx, lastMoveDst);
+    }
+
+    /**
+     * Two-click preview: hollow ring on the cell the next stone would land
+     * on. The ring is drawn as an outer disc minus an inner disc, both
+     * rounded so the ring follows the stone's footprint. Drawn after the
+     * stones so the preview is never hidden by a just-placed piece.
+     */
+    private void drawPlacementPreview(GuiGraphics gfx) {
+        if (previewSquare < 0) return;
+        BoardVariant v = variant();
+        if (!v.isValidSquare(previewSquare)) return;
+        int file = v.fileOf(previewSquare);
+        int rank = v.rankOf(previewSquare);
+        if (file < 0 || file >= cols() || rank < 0 || rank >= rows()) return;
+        // Only show the preview on the local player's own turn — server
+        // state could flip sdPlayer while a preview is still open.
+        if (myRole < 0 || myRole != sdPlayer) return;
+        // Don't preview a square that's already occupied (e.g. another
+        // player just moved into it). belt-and-braces; the click handler
+        // already cleared it, but the applySync→previewSquare path could
+        // miss a corner case if a click landed mid-sync.
+        BoardState bs = boardState();
+        if (bs == null || v.pieceAt(bs, previewSquare) != 0) return;
+
+        int cx = viewCX(file), cy = viewCY(rank);
+        // Match the stone disc radius so the ring tracks the cell exactly.
+        int r = Math.max(7, cell / 2 - 2);
+        // Hollow ring: draw an outer filled disc then punch a hole out of
+        // the middle with the same background color as the cell. The hole
+        // is one pixel smaller on each axis so the ring stays visible.
+        int inner = r - 2;
+        if (inner < 1) inner = 1;
+        // Use a slightly larger outer to make the ring read as a clear band.
+        gfx.fill(cx - r, cy - r, cx + r + 1, cy + r + 1, COL_PREVIEW_RING);
+        int bg = v.id().startsWith("go") ? COL_GO_BG : COL_GOMOKU_BG;
+        gfx.fill(cx - inner, cy - inner, cx + inner + 1, cy + inner + 1, bg);
     }
 
     private void drawPlacementLastMoveSquare(GuiGraphics gfx, int sq) {
@@ -1469,15 +1533,29 @@ public class CChessBoardScreen extends Screen {
         BoardVariant v = variant();
         byte pc = (bs != null) ? v.pieceAt(bs, sq) : 0;
 
-        // Placement variants (gomoku + go): a single click places a stone.
-        // The wire action is ACTION_PLACE (1 square arg) so the server's
-        // placement logic never has to share code with the xiangqi/chess
-        // move flow. Passes go through the dedicated ACTION_PASS path
-        // (the action button below the board).
+        // Placement variants (gomoku + go): two-click placement — first
+        // click shows a preview ring, second click on the same square
+        // confirms and sends ACTION_PLACE. Clicking a different empty
+        // square moves the preview; clicking an occupied square clears
+        // it. The wire action is still ACTION_PLACE (1 square arg) so
+        // the server's placement logic doesn't share code with the
+        // xiangqi/chess move flow. Passes go through ACTION_PASS (the
+        // button below the board).
         if (isPlacementVariant()) {
-            // Place only on an empty square; occupied squares do nothing.
-            if (pc == 0) {
+            if (pc != 0) {
+                // Occupied square — the preview is no longer valid here.
+                previewSquare = -1;
+                return;
+            }
+            if (previewSquare == sq) {
+                // Second click on the same square: confirm and place.
                 sendInteract(ACTION_PLACE, sq, 0);
+                previewSquare = -1;
+            } else {
+                // First click (or moved from a different square): show
+                // the preview here. Don't send anything until the player
+                // confirms with a second click.
+                previewSquare = sq;
             }
             return;
         }

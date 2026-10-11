@@ -66,16 +66,17 @@ public class CChessTileEntity extends BlockEntity {
 
         GameSession live = sm.get(key);
         if (live != null) {
-            // Apply the block's preferred variant to a still-default live session.
-            // This happens when {@link AbstractChessBoardBlock#onPlace} has already
-            // created the session with DEFAULT_ID via SessionManager.getOrCreate
-            // (before the block's variant ID was known to the session), and a
-            // first-time right-click arrives shortly after. Without this branch
-            // a freshly-placed gomoku/go9/go19 board would silently stay as
-            // xiangqi — because the live check at the top short-circuits before
-            // the preferred-variant logic runs further down.
+            // Apply the block's preferred variant unconditionally if the live
+            // session's variant differs from it. This handles two races:
+            //   1. {@link AbstractChessBoardBlock#onPlace} created the session
+            //      with DEFAULT_ID before the block's variant ID was known, and
+            //      a first-time right-click arrives shortly after.
+            //   2. A previous version stored a default-variant session to disk
+            //      that has now been rehydrated with a different variant.
+            // The override is idempotent if the live session already has the
+            // correct variant, so the cost is one string compare.
             if (preferredVariantId != null && !preferredVariantId.isEmpty()
-                    && BoardRegistry.DEFAULT_ID.equals(live.getVariantId())) {
+                    && !preferredVariantId.equals(live.getVariantId())) {
                 live.setVariantId(preferredVariantId);
             }
             restored = null;
@@ -83,12 +84,17 @@ public class CChessTileEntity extends BlockEntity {
         }
         if (restored != null) {
             GameSession adopted = sm.adopt(key, restored);
+            // Same race as above but in the restored branch.
+            if (preferredVariantId != null && !preferredVariantId.isEmpty()
+                    && !preferredVariantId.equals(adopted.getVariantId())) {
+                adopted.setVariantId(preferredVariantId);
+            }
             restored = null;
             return adopted;
         }
         GameSession fresh = sm.getOrCreate(key);
         if (preferredVariantId != null && !preferredVariantId.isEmpty()
-                && BoardRegistry.DEFAULT_ID.equals(fresh.getVariantId())) {
+                && !preferredVariantId.equals(fresh.getVariantId())) {
             fresh.setVariantId(preferredVariantId);
         }
         return fresh;

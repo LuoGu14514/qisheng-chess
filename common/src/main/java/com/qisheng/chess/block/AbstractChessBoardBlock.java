@@ -220,7 +220,10 @@ public abstract class AbstractChessBoardBlock extends BaseEntityBlock {
                         }
                         GameBroadcaster.broadcastSync(serverLevel, session, pos);
                     } else {
-                        serverPlayer.sendSystemMessage(GameMessages.joinedAsRed());
+                        // Match the C2S path's delivery — popup is more
+                        // visible than a chat line and stays visible until
+                        // the player clicks the screen away.
+                        GameBroadcaster.broadcastPopupTo(serverPlayer, GameMessages.joinedAsRed());
                     }
                     GameBroadcaster.broadcastRoster(serverLevel, session, pos);
                 } else {

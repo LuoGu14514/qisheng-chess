@@ -965,7 +965,7 @@ public class CChessBoardScreen extends Screen {
         gfx.fill(fx0 + 4, fy0 + 4,
                  fx0 + boardW + 28, fy0 + boardH + 28, COL_GOMOKU_BG);
 
-        int lineThick = Math.max(1, cell / 50);
+        int lineThick = Math.max(2, cell / 24);
         int cMax = cols();
         int rMax = rows();
         for (int c = 0; c < cMax; c++) {
@@ -978,13 +978,20 @@ public class CChessBoardScreen extends Screen {
             gfx.fill(squareX(0), y - lineThick / 2,
                      squareX(cMax - 1) + 1, y + (lineThick + 1) / 2, COL_GRID);
         }
+        // Mark every intersection with a small dot so the player can
+        // immediately tell that stones go on the line crossings (the
+        // classic Gomoku/Go convention), not in the cells between lines.
+        drawIntersectionDots(gfx, cMax, rMax);
 
         if (bs == null) return;
         // Last-move ring goes under the stones so it doesn't visually compete.
         drawPlacementLastMoveOverlay(gfx);
 
         BoardVariant v = variant();
-        int discR = Math.max(7, cell / 2 - 2);
+        // Stones are sized at ~80% of the cell (was 92% before) so a
+        // visible halo of background grid stays around each stone and the
+        // intersection point itself reads clearly under the disc.
+        int discR = Math.max(6, cell * 2 / 5 - 2);
         for (int rank = 0; rank < rMax; rank++) {
             for (int file = 0; file < cMax; file++) {
                 int sq = v.indexForFileRank(file, rank);
@@ -1013,7 +1020,7 @@ public class CChessBoardScreen extends Screen {
 
         int cMax = cols();
         int rMax = rows();
-        int lineThick = Math.max(1, cell / 50);
+        int lineThick = Math.max(2, cell / 24);
         for (int c = 0; c < cMax; c++) {
             int x = squareX(c);
             gfx.fill(x - lineThick / 2, squareY(0),
@@ -1024,13 +1031,19 @@ public class CChessBoardScreen extends Screen {
             gfx.fill(squareX(0), y - lineThick / 2,
                      squareX(cMax - 1) + 1, y + (lineThick + 1) / 2, COL_GRID);
         }
+        // Every-line dot pattern so the intersections read as the canonical
+        // stone positions, not the cells between lines.
+        drawIntersectionDots(gfx, cMax, rMax);
+        // Then overlay the canonical Go star points (hoshi) for go9 / go19.
         drawStarPoints(gfx, cMax, rMax);
 
         if (bs == null) return;
         drawPlacementLastMoveOverlay(gfx);
 
         BoardVariant v = variant();
-        int discR = Math.max(7, cell / 2 - 2);
+        // ~80% stone-to-cell ratio (was 92% before) — leaves a visible
+        // background halo around each stone so the intersection stays legible.
+        int discR = Math.max(6, cell * 2 / 5 - 2);
         for (int rank = 0; rank < rMax; rank++) {
             for (int file = 0; file < cMax; file++) {
                 int sq = v.indexForFileRank(file, rank);
@@ -1043,6 +1056,24 @@ public class CChessBoardScreen extends Screen {
         // Two-click preview ring sits on top of the stones so the player
         // always sees where the next stone would land.
         drawPlacementPreview(gfx);
+    }
+
+    /**
+     * Tiny dots at every line intersection. Placement variants (gomoku /
+     * go) put stones on these crossings, not in the cells between lines —
+     * marking every crossing with a small dot makes that convention
+     * unambiguous to the player even before the first stone is placed.
+     */
+    private void drawIntersectionDots(GuiGraphics gfx, int cMax, int rMax) {
+        int dotR = Math.max(1, cell / 28);
+        if (dotR < 1) return;
+        int col = COL_GRID;
+        for (int r = 0; r < rMax; r++) {
+            for (int c = 0; c < cMax; c++) {
+                int cx = viewCX(c), cy = viewCY(r);
+                gfx.fill(cx - dotR, cy - dotR, cx + dotR + 1, cy + dotR + 1, col);
+            }
+        }
     }
 
     /**
@@ -1101,7 +1132,7 @@ public class CChessBoardScreen extends Screen {
 
         int cx = viewCX(file), cy = viewCY(rank);
         // Match the stone disc radius so the ring tracks the cell exactly.
-        int r = Math.max(7, cell / 2 - 2);
+        int r = Math.max(6, cell * 2 / 5 - 2);
         // Hollow ring: draw an outer filled disc then punch a hole out of
         // the middle with the same background color as the cell. The hole
         // is one pixel smaller on each axis so the ring stays visible.
